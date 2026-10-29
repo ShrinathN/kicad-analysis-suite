@@ -11,7 +11,7 @@ The running design log, kept up to date during development, is [CLAUDE.md](../CL
   - There is no host `kicad-cli` with the Flatpak; use `flatpak run --command=kicad-cli org.kicad.KiCad`.
   - Run commands in the sandbox with `flatpak run --command=sh org.kicad.KiCad -c '...'`. The sandbox sees your home directory.
   - KiCad builds the plugin's venv from `kicad_plugin/requirements.txt` on first load, at
-    `~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.shinu.pcb-current-sim/`.
+    `~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.shinu.kicad-analysis-suite/`.
     wxPython from the sandbox stays visible inside that venv.
   - *Preferences → Plugins → Enable KiCad API* must be on; the interpreter is set in
     `~/.var/app/org.kicad.KiCad/config/kicad/10.0/kicad_common.json`.
@@ -21,7 +21,7 @@ The running design log, kept up to date during development, is [CLAUDE.md](../CL
 In the commands below, `VENV` is the plugin venv's `bin/python3` inside the Flatpak:
 
 ```sh
-VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.shinu.pcb-current-sim/bin/python3
+VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.shinu.kicad-analysis-suite/bin/python3
 ```
 
 ## Tests

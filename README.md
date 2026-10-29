@@ -1,6 +1,6 @@
-# PCB Analysis Suite for KiCad
+# kicad-analysis-suite
 
-A KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has two tools so far:
+**PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has two tools so far:
 
 - **DC & Thermal**: current density, IR drop and temperature on a real board, including resistance elements, current pulses (fusing) and magnetic field maps.
 - **Matching & Tolerance**: draw an RF matching network with real parts, then see whether it still meets its specs across part tolerances.

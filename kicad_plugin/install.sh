@@ -14,8 +14,14 @@ if [[ -z "${KICAD_PLUGIN_DIR:-}" ]]; then
     done
     KICAD_PLUGIN_DIR="${KICAD_PLUGIN_DIR:-$HOME/.local/share/kicad/$ver/plugins}"
 fi
-dest="$KICAD_PLUGIN_DIR/pcb_current_sim"
+dest="$KICAD_PLUGIN_DIR/kicad-analysis-suite"
 mkdir -p "$KICAD_PLUGIN_DIR"
+# Installs made before the rename used this folder (and the identifier io.github.shinu.pcb-current-sim);
+# remove it so KiCad does not load the plugin twice.
+if [[ -e "$KICAD_PLUGIN_DIR/pcb_current_sim/plugin.json" ]]; then
+    rm -rf "$KICAD_PLUGIN_DIR/pcb_current_sim"
+    echo "Removed the old install at $KICAD_PLUGIN_DIR/pcb_current_sim"
+fi
 rm -rf "$dest"
 mkdir -p "$dest"
 files=(plugin.json requirements.txt _bootstrap.py action.py home.py icon-24.png icon-48.png icon-home-24.png icon-home-48.png)

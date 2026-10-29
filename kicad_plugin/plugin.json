@@ -1,6 +1,6 @@
 {
   "$schema": "https://go.kicad.org/api/schemas/v1",
-  "identifier": "io.github.shinu.pcb-current-sim",
+  "identifier": "io.github.shinu.kicad-analysis-suite",
   "name": "PCB Analysis Suite",
   "description": "PCB analysis suite: DC current density, IR drop and electro-thermal now; PDN, SI, matching and 3D/full-wave tools to follow.",
   "runtime": {
