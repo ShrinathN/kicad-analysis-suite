@@ -195,7 +195,6 @@ Each tool rewrites only its own section. Version-1 files load as the `dc` sectio
 - the analytic thermal sheet, the automatic h against the heat balance, via barrels coupling the layers, element heat spread over pads
 - scanline zone fill against matplotlib's point-in-polygon test
 - IPC and Onderdonk formulas
-- the reference board (27.2 mΩ and 20.2 mΩ)
 - voltage source with a resistive load, load voltage against IR drop
 - B above and below a strip, hairpin loop inductance against Grover, Grover filaments
 - adiabatic pulse against Onderdonk, and a pulse from steady state that leaves T unchanged
@@ -209,5 +208,4 @@ It also holds `kicad_link` (the kipy wrapper), `tables` (helpers shared by both 
 `pcb_current_sim/matching/` holds the matching tool's core: `model` (elements, ports, bands, ABCD cascade), `analysis` (corners, Monte Carlo, worst case, sensitivity, BOM), `touchstone`, `microstrip` and `plots`. `wxgui/matching.py` is its window and `wxgui/schematic.py` the symbol canvas.
 `pcb_current_sim/suite/` holds the toolkit-neutral suite core: `session` (shared state and change events), `stackup`, `library`, `tools` (the tool registry), `external` (solver detection) and `results_index`. `wxgui/suite.py` holds Home, the Suite menu and the shared panels.
 `kicad_plugin/` holds the KiCad plugin files: `plugin.json` (two actions), `_bootstrap.py`, `home.py`, `action.py`, icons and `install.sh`.
-`sim/current_density.py` is the original single-board prototype, kept for reference.
 `sim/demo/` holds the demo board and four wx smoke tests: `smoke.py` (main window and viewer), `smoke3d.py` (3D tab), `smoke_suite.py` (Home, the shared panels and the DC window) and `smoke_matching.py` (builds a network in the editor, runs every analysis and screenshots every tab). The last two work on a copy in `smoke_out/`, and `smoke_suite.py` clears that folder first. Run them with the plugin venv's python inside the Flatpak; they write screenshots next to themselves.

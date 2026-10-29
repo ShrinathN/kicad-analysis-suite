@@ -168,17 +168,6 @@ def test_ipc_and_onderdonk():
     assert RS.onderdonk_time(A, I1, 25) == pytest.approx(1.0, rel=1e-9)
 
 
-def test_reference_board_matches_previous_script():
-    path = os.path.join(os.path.dirname(__file__), "..", "test.kicad_pcb")
-    if not os.path.exists(path):
-        pytest.skip("reference board not present")
-    b = B.load(path)
-    rows = [S.Row("sig", ["J1.2"], ["J2.2"], 10), S.Row("gnd", ["J2.1"], ["J1.1"], 10)]
-    r = run(b, rows, S.Settings(thermal=False))
-    assert r.rows[0]["R_mOhm"] == pytest.approx(27.3, rel=0.02)
-    assert r.rows[1]["R_mOhm"] == pytest.approx(20.2, rel=0.02)
-
-
 # ---- resistance elements ----------------------------------------------------
 from pcb_current_sim import elements as EL     # noqa: E402
 

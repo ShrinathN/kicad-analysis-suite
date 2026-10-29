@@ -30,8 +30,8 @@ VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.s
 python3 -m pytest tests
 ```
 
-About 60 tests in about 25 s:
-- `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results and a reference board.
+About 60 tests in about 20 s:
+- `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results.
 - `tests/test_suite.py`: stackup parsing and the εr(f) model, scenario migration, the session, the component library and external tool detection.
 - `tests/test_matching.py`: the matching network maths (L-match, transformers, stubs, microstrip, Touchstone, S2P) and the tolerance analyses.
 
@@ -89,8 +89,8 @@ pcb_current_sim/
   tables.py                 helpers shared by both GUIs
 kicad_plugin/               plugin.json (two toolbar actions), entry points, icons, install.sh
 sim/demo/                   demo board, smoke tests, screenshot script
-sim/current_density.py      the original single-board prototype, kept for reference
-test.kicad_*                the reference board used by the tests
+tests/                      pytest suite
+docs/                       user guide, development notes, roadmap, screenshots
 ```
 
 ### Conventions
