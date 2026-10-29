@@ -82,7 +82,7 @@
   - At 3 A it converges with T_max about 58 °C, close to the IPC-2152 chart value of about 30 K rise.
 - The wx GUI was tested end to end inside the Flatpak sandbox: run, cursor readout, ΔV reference and PDF export.
 - `kicad_link.py` was checked against the kicad-python 0.8.0 source: `Board.name`, `document.project.path`, `get_selection`, `Pad.number`/`Pad.position` (nm), `save` and `refill_zones`.
-  - It has **not yet been exercised against a running KiCad**: selecting pads, reading the board path, save, and refill.
+  - 2026-10-29: the user ran the plugin in a live KiCad 10 (Flatpak) and reported that it works, including the two toolbar buttons and the KiCad link.
 
 ## Suite framework (build step 1): done 2026-10-29
 - `pcb_current_sim/suite/`, toolkit-neutral:

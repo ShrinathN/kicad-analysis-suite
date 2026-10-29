@@ -78,7 +78,7 @@ python3 -m pcb_current_sim board.kicad_pcb --row "J1.2>J2.2:3" --out results   #
 ## Status
 
 - DC & Thermal and Matching & Tolerance work and are covered by tests (`python3 -m pytest tests`).
-- The KiCad link (reading the pad selection, saving and refilling through the API) has not yet been tested against a running KiCad.
+- Tested in a running KiCad 10 (Flatpak): both toolbar buttons and the KiCad link (pad selection, save, refill).
 - Developed and tested on Linux with the KiCad 10 Flatpak.
 
 ## License
