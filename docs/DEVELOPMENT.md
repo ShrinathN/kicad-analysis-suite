@@ -18,6 +18,13 @@ The running design log, kept up to date during development, is [CLAUDE.md](../CL
 - **Installing the plugin**: `kicad_plugin/install.sh` copies the plugin into KiCad's plugin folder, so re-run it after code changes.
   `install.sh --link` symlinks instead, for development.
 
+**If the toolbar buttons don't appear:**
+- The plugin must be in `~/.var/app/org.kicad.KiCad/data/kicad/10.0/plugins/` (where `install.sh` puts it), not in `scripting/plugins/`, which is only for the old SWIG plugins.
+- KiCad shows the buttons only after it has installed `requirements.txt` into the plugin venv. If KiCad was closed during that install, or it failed, the venv contains only pip. Install the requirements by hand (with `VENV` as below) and restart KiCad:
+  ```sh
+  flatpak run --command=sh org.kicad.KiCad -c "$VENV -m pip install -r ~/.var/app/org.kicad.KiCad/data/kicad/10.0/plugins/kicad-analysis-suite/requirements.txt"
+  ```
+
 In the commands below, `VENV` is the plugin venv's `bin/python3` inside the Flatpak:
 
 ```sh
