@@ -1,7 +1,7 @@
 # kicad-analysis-suite: PCB Analysis Suite (KiCad 10 plugin)
 
 ## Project
-- Repository / GitHub name: `kicad-analysis-suite`. Plugin identifier `io.github.shinu.kicad-analysis-suite` (was `io.github.shinu.pcb-current-sim`); `install.sh` installs to `plugins/kicad-analysis-suite/` and removes the old `plugins/pcb_current_sim/`. The plugin venv is `python-environments/io.github.shinu.kicad-analysis-suite/` (KiCad creates it on first load). The Python package keeps the name `pcb_current_sim`.
+- Repository: https://github.com/ShrinathN/kicad-analysis-suite (remote `origin`, branch `main`, push over SSH). Plugin identifier `io.github.shrinathn.kicad-analysis-suite` (was `io.github.shinu.pcb-current-sim`); `install.sh` installs to `plugins/kicad-analysis-suite/` and removes the old `plugins/pcb_current_sim/`. The plugin venv is `python-environments/io.github.shrinathn.kicad-analysis-suite/` (KiCad creates it on first load). The Python package keeps the name `pcb_current_sim`.
 - The repository holds only the plugin: `pcb_current_sim/`, `kicad_plugin/`, `tests/`, `docs/` and `sim/demo/` (demo board, smoke tests, screenshot script).
 - On 2026-10-29 the user had the original test project removed: `test.kicad_*`, `test.current_sim.json`, `test-backups/`, the prototype `sim/current_density.py` and its outputs, plus the reference-board test. They are in git history (commit f547e94) if ever needed.
   - That board was two 1x02 headers joined by a GND track (2 mm -> 1 mm -> 0.6 mm) and a 1 mm signal track with diagonals, all on F.Cu. The results quoted below refer to it.
