@@ -1,0 +1,48 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "io.github.shinu.pcb-current-sim",
+  "name": "PCB Analysis Suite",
+  "description": "PCB analysis suite: DC current density, IR drop and electro-thermal now; PDN, SI, matching and 3D/full-wave tools to follow.",
+  "runtime": {
+    "type": "python",
+    "min_version": "3.9"
+  },
+  "actions": [
+    {
+      "identifier": "suite",
+      "name": "PCB Analysis Suite",
+      "description": "Open the suite's Home window: all tools, shared stackup, component library and results.",
+      "show-button": true,
+      "scopes": [
+        "pcb"
+      ],
+      "entrypoint": "home.py",
+      "icons-light": [
+        "icon-home-24.png",
+        "icon-home-48.png"
+      ],
+      "icons-dark": [
+        "icon-home-24.png",
+        "icon-home-48.png"
+      ]
+    },
+    {
+      "identifier": "simulate",
+      "name": "DC & Thermal",
+      "description": "Simulate DC current flow between chosen pads (current density, IR drop, heating).",
+      "show-button": true,
+      "scopes": [
+        "pcb"
+      ],
+      "entrypoint": "action.py",
+      "icons-light": [
+        "icon-24.png",
+        "icon-48.png"
+      ],
+      "icons-dark": [
+        "icon-24.png",
+        "icon-48.png"
+      ]
+    }
+  ]
+}

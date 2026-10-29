@@ -1,0 +1,66 @@
+{
+ "rows": [
+  {
+   "name": "supply",
+   "src": [
+    "J1.1"
+   ],
+   "snk": [
+    "J1.2"
+   ],
+   "current": 12,
+   "kind": "V"
+  }
+ ],
+ "elements": [
+  {
+   "name": "Q1",
+   "a": "Q1.3",
+   "b": "Q1.2",
+   "R": 0.02,
+   "P_rated": 0.35,
+   "enabled": true,
+   "auto": false,
+   "heats": true
+  },
+  {
+   "name": "LOAD",
+   "a": "J2.1",
+   "b": "J2.2",
+   "R": 2.4,
+   "P_rated": null,
+   "enabled": true,
+   "auto": false,
+   "heats": false
+  }
+ ],
+ "settings": {
+  "pitch": "auto",
+  "rho20": 1.72e-08,
+  "alpha": 0.00393,
+  "t_plate": 2.4999999999999998e-05,
+  "thickness": {},
+  "T_cold": 20.0,
+  "thermal": true,
+  "T_amb": 25.0,
+  "h_conv": 12.0,
+  "h_auto": true,
+  "emissivity": 0.9,
+  "k_fr4": 0.3,
+  "k_cu": 390.0,
+  "max_iter": 10,
+  "tol": 0.5,
+  "error_estimate": true,
+  "max_cells": 1500000,
+  "auto_resistors": true,
+  "crop": true,
+  "thermal_margin": 20.0,
+  "magnetic": true,
+  "b_height": 1.0,
+  "pulse": true,
+  "pulse_scale": 4.0,
+  "pulse_ms": 20.0,
+  "pulse_from_steady": true,
+  "pulse_steps": 50
+ }
+}
