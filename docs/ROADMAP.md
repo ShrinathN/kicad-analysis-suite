@@ -39,7 +39,7 @@ The decisions:
      - Warn where power copper has no return copper under it.
      - Why not reuse the DC current pattern for L: at PDN frequencies the return current runs under the power copper, while the DC return spreads out, so the DC-pattern L is too large.
 3. **Signal integrity & fields**:
-   - Trace Z₀, effective permittivity and crosstalk from a 2D cross-section Laplace solve.
+   - Trace Z₀ and effective permittivity: done in the Trace R/L/C → SPICE tool (2D cross-section solver, `extract/xsection.py`). Crosstalk (coupled lines, mutual L and C) builds on the same solver.
    - Return-current path at frequency (moved here from PDN).
    - HV E-field and clearance/creepage.
 4. **Full-wave export**: openEMS, for antennas and S-parameters.
@@ -105,6 +105,7 @@ Framework, to build first:
 **Build order (my call; the user left it to me):**
 1. Suite framework: Home, shared stackup and materials, component library, scenario sections, "Suite" menus, plugin.json actions.
 2. **Matching & Tolerance**: self-contained and quick to finish, and it establishes the component library.
+2b. **Trace R/L/C → SPICE** (done 2026-10-30, at the user's request): R, L, C of the copper between pads, SPICE RLC subcircuit. Pours (meshed, Kron-reduced R/L/C) and R / diode / C / L elements between pads were added the same day. Next for it: coupled traces (crosstalk), frequency-dependent R (skin-effect R-L network per section), solder mask, sectioned models of pours larger than λ/10, PDN reuse of the zone mesh, via and cross-section models.
 3. PDN.
 4. FastHenry / FastCap extraction.
 5. openEMS export.

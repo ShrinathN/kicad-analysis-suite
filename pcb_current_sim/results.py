@@ -394,7 +394,8 @@ def build_result(board, R, net, sol, cold, coarse, tm, rows, s, thick, info, mag
         P = abs(I * dV)
         P_el += P
         pa, pb = pad_of[e.a], pad_of[e.b]
-        d = dict(name=e.name, a=e.a, b=e.b, net_a=pa.net, net_b=pb.net, R=EL.fmt_ohms(e.R), R_ohm=e.R,
+        d = dict(name=e.name, a=e.a, b=e.b, net_a=pa.net, net_b=pb.net, R=e.describe(), R_ohm=e.R, model=e.model, Vf_V=e.Vf,
+                 conducting=bool(net.el_on[k]),
                  I_A=I, V_mV=dV * 1e3, P_W=P, P_rated_W=e.P_rated,
                  util=P / e.P_rated if e.P_rated else None,
                  T_C=max(T_at(pa.layers[0], *pa.pos), T_at(pb.layers[0], *pb.pos)),

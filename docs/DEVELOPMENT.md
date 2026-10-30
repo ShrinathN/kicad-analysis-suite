@@ -37,9 +37,11 @@ VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.s
 python3 -m pytest tests
 ```
 
-About 60 tests in about 20 s:
+About 82 tests in about 15 s:
 - `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results.
 - `tests/test_suite.py`: stackup parsing and the εr(f) model, scenario migration, the session, the component library and external tool detection.
+- `tests/test_linsolve.py`: the solver backends, copper coverage as a union, the setup cache and the thermal cell.
+- `tests/test_extract.py`: the cross-section solver against Hammerstad–Jensen and Wheeler, path tracing (vias, stubs, coplanar, missing return), pours (C, L and R against analytic values and the DC solver), elements across nets and to REF, R calibration, SPICE output, and runs of the subcircuit and a diode element in ngspice (skipped without ngspice).
 - `tests/test_matching.py`: the matching network maths (L-match, transformers, stubs, microstrip, Touchstone, S2P) and the tolerance analyses.
 
 ## GUI smoke tests and screenshots
@@ -51,6 +53,7 @@ These open real windows, so run them inside the Flatpak with the plugin venv, an
 | `sim/demo/smoke.py` | DC window, element dialog, a run, the result viewer | PNGs next to the script |
 | `sim/demo/smoke3d.py` | The viewer's 3D tab | `sim/demo/viewer_3d.png` |
 | `sim/demo/smoke_suite.py` | Home and the shared panels; a stackup edit reaching the DC window | `sim/demo/smoke_out/` (cleared first) |
+| `sim/demo/smoke_extract.py` | Opens Trace R/L/C on the demo board, extracts a trace, shows every tab | `sim/demo/smoke_out/` |
 | `sim/demo/smoke_matching.py` | Builds a network in the matching editor, edits properties, runs every analysis | `sim/demo/smoke_out/` |
 | `sim/demo/screenshots.py` | Regenerates the documentation screenshots | `docs/screenshots/` |
 
@@ -66,7 +69,8 @@ It grabs windows from the screen, so anything on top of them ends up in the pict
 ```
 pcb_current_sim/
   sexpr.py, board.py        .kicad_pcb parser (tracks, arcs, vias, zones, pads, stackup with plies)
-  raster.py, solver.py      cut-cell finite-volume DC solver (rows, elements, voltage sources)
+  raster.py, solver.py      cut-cell finite-volume DC solver (rows, elements, voltage sources); setup cache
+  linsolve.py               sparse factorisation for every tool (SuperLU, optional PARDISO, CG fallback)
   thermal.py, magnetic.py   electro-thermal model, B-field maps and loop inductance
   elements.py               resistance elements (auto-detected resistors, user elements)
   results.py, export.py     result container, plots, PDF / HTML / CSV, 3D (plotly)
@@ -81,6 +85,12 @@ pcb_current_sim/
     tools.py                tool registry for Home and the Suite menu
     external.py             openEMS / FastHenry / FastCap / ParaView detection (incl. Flatpak apps)
     results_index.py        finds saved results
+  extract/                  Trace R/L/C → SPICE core
+    path.py                 traces a net's copper between pads as a graph (tracks, vias, pads, zones)
+    xsection.py             2D finite-volume field solver: C', L', Z0, εeff of a cross-section
+    rlc.py                  cross-sections along the path, via / pad models, ladder, DC calibration
+    spice.py                .subckt writer (plain R, L, C)
+    __main__.py             command line
   matching/                 Matching & Tolerance core
     model.py                elements, ports, bands, ABCD cascade
     analysis.py             corners, Monte Carlo, worst case, sensitivity, BOM
@@ -91,6 +101,7 @@ pcb_current_sim/
     suite.py                Home, Suite menu, stackup / library / results / external windows
     app.py, viewer.py       DC & Thermal window and result viewer (2D, 3D, tables)
     matching.py             Matching & Tolerance window
+    extract.py              Trace R/L/C → SPICE window
     schematic.py            symbol canvas for the matching editor
   gui/                      Tk GUI (DC & Thermal only, for hosts without wx)
   tables.py                 helpers shared by both GUIs

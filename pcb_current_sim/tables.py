@@ -28,7 +28,8 @@ ROW_TEXT = {  # kind -> (left list label, right list label, value label, hint)
           "Its current is set by the loads and resistance elements connected to it."),
 }
 
-FLOAT_SETTINGS = ("T_cold", "T_amb", "h_conv", "emissivity", "k_fr4", "rho20", "b_height", "pulse_scale", "pulse_ms")
+FLOAT_SETTINGS = ("T_cold", "T_amb", "h_conv", "emissivity", "k_fr4", "thermal_pitch", "rho20", "b_height",
+                  "pulse_scale", "pulse_ms")
 CHECKS = [("thermal", "Electro-thermal coupling (ρ(T), temperature map)"),
           ("h_auto", "h from temperature (natural convection + radiation)"),
           ("error_estimate", "Grid error estimate (extra coarse solve)"),

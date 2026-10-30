@@ -1,10 +1,14 @@
-"""Lumped two-terminal resistive elements between pads.
+"""Lumped two-terminal elements between pads: a resistance, or a constant voltage drop.
 
 Resistor footprints are detected automatically (2 pads, a parseable Value).
 Any other part (inductor DCR, FET R_on, fuse, connector, external load ...)
 can be added by hand as a resistance between two of its pads.  Each element
 pad becomes an equipotential electrode on its copper, and the two electrodes
 are joined by 1/R.  The element's I^2 R is a heat source in the thermal model.
+
+A constant-drop element (model "V", e.g. a diode) is Vf in series with R and
+conducts from pad a (anode) to pad b only; it is open while V_a - V_b < Vf.
+It dissipates I (Vf + I R).
 """
 import re
 from dataclasses import dataclass, replace
@@ -30,9 +34,26 @@ class Element:
     enabled: bool = True
     auto: bool = False       # detected from a resistor footprint (not user-defined)
     heats: bool = True       # its I^2 R heats the board (off for an external load or wire)
+    model: str = "R"         # "R" resistance, "V" constant drop Vf + R conducting a -> b only (diode),
+    #                          "C" capacitor, "L" inductor (ideal; RLC extraction; DC: C open, L short)
+    Vf: float = 0.0          # V, model "V" only
+    C: float = 0.0           # F, model "C"
+    L: float = 0.0           # H, model "L"
 
     def label(self):
         return f"{self.name} ({self.a}-{self.b})"
+
+    def describe(self):
+        """Value column text: '4.7 kΩ', or '0.7 V + 10 mΩ' (→) for a constant drop."""
+        if self.model == "C":
+            from .suite.library import fmt_si
+            return fmt_si(self.C, "F")
+        if self.model == "L":
+            from .suite.library import fmt_si
+            return fmt_si(self.L, "H")
+        if self.model != "V":
+            return fmt_ohms(self.R)
+        return f"{self.Vf:g} V →" + (f" + {fmt_ohms(self.R)}" if self.R else "")
 
 
 def parse_ohms(text):

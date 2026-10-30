@@ -123,13 +123,13 @@ class FFTConv:
     def kernel(self, K):
         Kc = np.zeros(self.N)
         Kc[:K.shape[0], :K.shape[1]] = K
-        return sfft.rfft2(np.roll(Kc, (-(self.ny - 1), -(self.nx - 1)), axis=(0, 1)))
+        return sfft.rfft2(np.roll(Kc, (-(self.ny - 1), -(self.nx - 1)), axis=(0, 1)), workers=-1)
 
     def fwd(self, a):
-        return sfft.rfft2(a, s=self.N)
+        return sfft.rfft2(a, s=self.N, workers=-1)
 
     def inv(self, F):
-        return sfft.irfft2(F, s=self.N)[:self.ny, :self.nx]
+        return sfft.irfft2(F, s=self.N, workers=-1)[:self.ny, :self.nx]
 
 
 def grover_parallel(a1, a2, b1, b2, d):

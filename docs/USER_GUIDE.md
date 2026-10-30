@@ -19,7 +19,7 @@ It also builds per-pad, per-via and per-track tables, with IPC-2221 and Onderdon
 1. Run `kicad_plugin/install.sh`. Use `--link` to symlink instead of copy.
    It finds the Flatpak's plugin folder (`~/.var/app/org.kicad.KiCad/data/kicad/10.0/plugins`) or the native one (`~/.local/share/kicad/10.0/plugins`).
 2. In KiCad, open *Preferences → Plugins* and tick **Enable KiCad API**. Then restart the PCB editor.
-3. On first load, KiCad creates the plugin's Python venv from `requirements.txt` (kicad-python, numpy, scipy, matplotlib, pyamg, plotly).
+3. On first load, KiCad creates the plugin's Python venv from `requirements.txt` (kicad-python, numpy, scipy, matplotlib, plotly).
    This needs network access, and the toolbar button appears once it finishes.
    The GUI uses wxPython, which ships with KiCad (Flatpak included). On native installs without wx it falls back to Tk.
 4. The plugin adds two toolbar buttons: **PCB Analysis Suite** (the tiles icon) opens the Home window, and **DC & Thermal** opens that tool directly.
@@ -40,6 +40,7 @@ A row is written `SRC>SNK:AMPS[:NAME]`. Join several pads on one side with `+`, 
 Voltage sources and loads: `--vsource "PLUS>MINUS:VOLTS[:NAME]"`, `--load "PLUS>MINUS:AMPS[:NAME]"`.
 Add a resistance element with `--element PAD_A-PAD_B=OHMS[:NAME[:WATTS]][:ext]`, for example `Q1.3-Q1.2=20m:Q1:0.35`.
 `:ext` marks an off-board load or wire whose dissipation does not heat the board.
+A diode (constant drop) is `--element ANODE-CATHODE=VOLTSv[+OHMS]`, for example `D1.2-D1.1=0.45V+20m:D1`.
 Pulse: `--pulse SCALE:MS[:steady]` (all rows × SCALE for MS ms, from ambient or from the steady state).
 Other options: `--no-auto-resistors`, `--no-crop`, `--no-magnetic`, `--b-height MM`.
 
@@ -50,10 +51,10 @@ Example board with a shunt, a FET element and pull resistors: `sim/demo/demo.kic
 All windows run in one process and share the loaded board, the stackup and the component library. Every window has a **Suite** menu that leads to Home, the tools and the shared panels.
 - **Home** shows the board, its stackup and what the scenario file holds, with tiles for each tool:
   - POWER: DC & Thermal, PDN (AC)
-  - SIGNAL & FIELDS: SI & Fields, 3D extraction
+  - SIGNAL & FIELDS: Trace R/L/C → SPICE, SI & Fields, 3D extraction
   - RF / CIRCUIT: Matching & Tolerance, Full-wave (openEMS)
 
-  DC & Thermal and Matching & Tolerance are built; the other tiles are marked *planned*.
+  DC & Thermal, Trace R/L/C → SPICE and Matching & Tolerance are built; the other tiles are marked *planned*.
 - **Stackup & materials** shows copper thickness (with overrides) and dielectric thickness, εr and tanδ.
   - εr and tanδ come from the board's stackup, default to 4.3 / 0.02, and can be edited at a reference frequency.
   - Plies inside one dielectric are combined in series. KiCad's `addsublayer` plies are read.
@@ -69,6 +70,29 @@ All windows run in one process and share the loaded board, the stackup and the c
 - **Results browser** lists saved results (`.npz` plus its `.json` sidecar) under the board folder, and the last unsaved run.
 - **External tools** looks for openEMS, FastHenry, FastCap and ParaView.
   Inside the Flatpak, host programs can only be run after `flatpak override --user --talk-name=org.freedesktop.Flatpak org.kicad.KiCad`; without that, the 3D tools will export their input files instead.
+
+**Trace R/L/C → SPICE** turns the copper between pads into an RLC model for a circuit simulator.
+- **Ports.** Two or more pads, in order (P1, P2, …): "Add pad…" or "From KiCad selection". P1 is the reference end; totals are given from P1 to each other port. They must be on one net, or on nets that elements join; not on a return net.
+- **Return nets.** The conductors that carry the return current (GND-like nets are ticked by default). Tick power planes too when decaps tie them to ground at the frequencies of interest.
+- **Elements.** Any two pads can be joined by a resistor, a diode (constant drop Vf plus a series R, conducting from pad A to pad B), a capacitor or an inductor: "Add…" or "From KiCad selection" (two pads). C and L are ideal (no ESR, ESL or SRF). Elements may join nets, so a path can run trace → part → trace. A pad on a return net is the REF node, so a decap from the signal to a GND pad is a shunt C to REF; the GND plane is not pulled in as a conductor. Elements can be switched off without deleting them. With elements present, the DC calibration of R is skipped (the field solution would include them).
+- **What it does.**
+  1. Traces the copper from P1: tracks, arcs (as polylines), vias (one node per layer, barrel pieces between them), pads, T-junctions, vias and pads sitting on the middle of a track, touching track ends, and copper that overlaps (a via ring on a pad edge, a track end within half its width of a pad). With "Include stubs", branches to other pads stay in as open stubs; otherwise only the paths between the ports are kept.
+  1b. **Copper pours.** A zone of the net is a multi-terminal conductor between everything that touches it (pads, vias, track ends). It is meshed (pitch ≥ 0.05 mm, up to 60k cells): each link conducts σ·t through the copper part of the cell face, and has the sheet inductance of copper over its return, μ₀·h per square (h is the dielectric to the nearest return copper above or below; with both, the two in parallel); each cell has C = ε₀εr·A/h to the return. The mesh is reduced exactly onto the terminals (Kron reduction of the conductance network and of the inverse-inductance network), giving an R and an L branch between every pair of terminals; the cells' C is split among the terminals by the harmonic weights of the DC solution. A 20 × 4 mm pour 1.51 mm over a plane gives ε·A/h and μ₀·h·l/W to within 1 %, and the same R as the DC solver. A pour larger than λ/10 at f max gets a warning with the frequency up to which its lumped model holds; parts without return copper under them use h = board thickness (warned).
+  2. Every `sample` mm along each track, cuts the return copper perpendicular to the track within ±`window` mm on every layer (zones and tracks of the return nets; pads and vias are left out as they are short). A 2D finite-volume field solve of that cross-section (dielectrics from the stackup at f max, inner copper embedded in resin, air above and below) gives C′ and, from the same solve in air, L′ = 1/(c²C₀′). Identical cross-sections are solved once.
+  3. R′ = ρ(T)/(w·t). "Calibrate R" runs the DC solver from P1 to P2 and scales the ladder's R so that the DC resistance matches the real copper (pads, current crowding, vias).
+  4. Vias: barrel R; L = μ₀h/2π·ln(s/r) with the nearest return via at s, else the partial inductance 0.2h(ln(4h/d)+1) nH; C from the antipad radius found in the return planes (Johnson & Graham). SMD pads add C′(pad width) × pad length; THT pads a via-like C.
+  5. Each chain of track pieces between junctions is cut into equal sections no longer than λ/10 at f max (and "Max section"). A section is R + L in series with C/2 to the return at each end (π ladder). "Dielectric loss G" adds ωC·tanδ at f max as shunt resistors.
+- **Accuracy.** The field solver is within about 2 % of Hammerstad–Jensen (microstrip) and Wheeler (stripline with thickness). The subcircuit's delay in ngspice matches the extracted delay. IPC-2141 stripline formulas read up to 10 % high for narrow traces; trust the field solve.
+- **Outputs.**
+  - Summary: per path length, via count, R, L, C, average and min–max Z₀, delay; total shunt C; the R calibration; warnings.
+  - Segments: layer, width, length, Z₀, εeff, L′, C′, R′ (DC) and R′(f) (skin effect at f max), delay and the return found ("In1.Cu", "B.Cu (offset)", "coplanar, gap 0.2 mm", "none in window"). Vias, pads, zones (terminals, area, mesh, C, and R and L of the worst terminal pair) and elements. CSV export.
+  - Path totals: R and L are those of the whole network between the ports (zones, elements and parallel paths included; L is the high-frequency loop inductance); C is all the shunt C to the return.
+  - Board: the tracks coloured by Z₀, extracted pours in orange, return zones in grey, ports, vias, and steps of more than 10 % in Z₀ marked. "Select path in KiCad" selects its tracks and vias in the PCB editor.
+  - SPICE: `.subckt NAME P1 P2 … REF` with plain R, L and C (any SPICE; ASCII; comments on their own lines). A diode element becomes a DC source Vf, a near-ideal diode (`.model DVF D(IS=1e-12 N=0.02)`, about 15 mV at 1 A) and its series R. Connect REF to the circuit's ground at the ports.
+  - Schematic: the ladder from P1 to P2 drawn with its values, including elements (diodes with their own symbol); stubs and other ports show as branch boxes.
+- **Command line.** `python3 -m pcb_current_sim.extract BOARD PAD PAD [PAD…] [--return GND] [--fmax 1G] [-o trace.lib]`.
+- **Limits.** Quasi-static: no radiation, no dispersion; good while the cross-section is much smaller than a wavelength (low GHz on normal boards). No coupling to other signal nets (crosstalk is planned with SI & Fields). The ladder's R is DC, so skin-effect loss is not in the time-domain model (R′(f) is reported). Without return copper within the window, L is the trace's partial inductance and C ≈ 0 (red dashed on the board view). Solder mask is not modelled (Z₀ reads 1–3 % high on outer layers).
+- **Saving.** Ports, return nets, elements and options go into the scenario's `extract` section.
 
 **Matching & Tolerance** checks whether a matching network still works across real part tolerances.
 - **Visual editor.** Symbols appear on the schematic as you add parts from the palette: series or shunt L, C and R, transmission lines, open and shorted stubs, and a two-port from an `.s2p` file.
@@ -88,7 +112,7 @@ All windows run in one process and share the loaded board, the stackup and the c
 - **Saving.** The network goes into the scenario's `matching` section when a board is open, or into a `.match.json` file. It saves on every run and when the window closes.
 - Not modelled: microstrip dispersion and thickness correction, coupling between parts, and pad or via parasitics (add them as elements).
 
-**Scenario file.** `<board>.current_sim.json` (version 2) has one section per tool: `stackup`, `dc`, and later `matching`, `pdn` and so on.
+**Scenario file.** `<board>.current_sim.json` (version 2) has one section per tool: `stackup`, `dc`, `matching`, `extract`, and later `pdn` and so on.
 Each tool rewrites only its own section. Version-1 files load as the `dc` section, and their copper-thickness overrides move to `stackup`.
 
 ## Model
@@ -109,9 +133,18 @@ Each tool rewrites only its own section. Version-1 files load as the `dc` sectio
   - Each element's I²R heats its two pads in the thermal model. The Elements table shows R, I, V, P and P against the rating.
   - With current excitation, an element that bridges two separately excited loops (for example a bleeder across the supply) carries ≈0 A, because nothing sets the voltage between the loops.
   - 0 Ω parts are ideal links (1 µΩ). TCR and Kelvin sensing are not modelled.
+  - **Constant voltage drop (diodes).** In the element dialog, choose *Constant voltage drop* instead of *Resistance*: the element is Vf in series with a resistance (0 allowed), and conducts only from pad A (anode) to pad B (cathode).
+    - It blocks while V(A) − V(B) < Vf. The solver starts with all diodes conducting, turns off any that carry reverse current, turns on any blocked one forward-biased past Vf, and repeats until the states are consistent (also on every electro-thermal iteration).
+    - It dissipates I·(Vf + I·R), which heats its pads like a resistor. The Elements table shows its value as `0.45 V → + 20 mΩ` and whether it conducts.
+    - A current row forced through a blocking diode is an error (open circuit), with the diode named. A zener in breakdown is a constant-drop element with its pads swapped.
+    - Vf does not change with temperature or current beyond the series R; for the inductance calculation a conducting diode counts as its series R.
 - **Speed.** By default the electrical grid covers only the bounding box of the simulated copper, snapped to the whole-board lattice, so the result is identical.
-  The thermal grid adds 20 mm of board around it (`thermal_margin`), and its cut edges are adiabatic.
-  Sparse factorisations use a symmetric minimum-degree ordering, which is about 3× faster than the default.
+  - The thermal grid adds 20 mm of board around it (`thermal_margin`), and its cut edges are adiabatic.
+  - **Thermal cell** (setting, default 0.3 mm; 0 = as fine as 300k cells per layer allow). Heat spreads over millimetres, so this is much coarser than the electrical grid. Each cell's copper fraction is the union of all copper in it, sampled at about 30 µm. On Magnus_Gateway, 0.3 mm reads T_max 1.6 K (2 % of the rise) below a 0.18 mm grid and runs 3× faster; on the demo board 1.1 K of 130 K. Coarser cells read slightly cool, because a trace and the pour next to it share a cell once the cell is wider than their clearance. Short pulses get their own finer grid (≤ a tenth of the heat's reach).
+  - All sparse solves go through `linsolve.py`: SuperLU with a symmetric minimum-degree ordering, or Intel PARDISO when `pypardiso` is installed in the plugin's venv (optional, about 1 GB of MKL; about 10× faster factorisation of large thermal grids; `PCB_SIM_SOLVER=superlu` turns it off). Iterative multigrid is not used: on copper-next-to-FR4 matrices it was 50× slower and up to 8 % off.
+  - Independent work runs in parallel threads: the thermal model is built while the electrical system is solved, the error-estimate solve runs alongside the electro-thermal loop, and the B maps alongside the inductance solve. FFTs use all cores.
+  - The copper raster and the thermal model are cached. Running again on the same board with other currents, voltages, ambient or emissivity skips their setup; reloading the board or changing copper thickness, h, k or the thermal cell rebuilds them.
+  - Magnus_Gateway (thermal, error estimate, B maps): 24 s before these changes, 8 s now, 4.6 s on a re-run. A 0.7 M-node electrical grid solves in about 5 s.
 - **Geometry.** The tool reads:
   - tracks and arcs on all copper layers
   - vias, with barrel resistance R = ρL / (π·t_plate·(d + t_plate))

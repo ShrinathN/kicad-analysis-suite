@@ -122,12 +122,17 @@ class RowDialog(wx.Dialog):
 
 
 
-class ElementDialog(wx.Dialog):
-    """Edit one resistance element: two pads (any parts), R, optional power rating."""
+MODEL_LABELS = {"R": "Resistance", "V": "Constant voltage drop (diode, A → B)", "C": "Capacitor", "L": "Inductor"}
 
-    def __init__(self, parent, board, el):
-        super().__init__(parent, title="Resistance element", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+
+class ElementDialog(wx.Dialog):
+    """Edit one element between two pads (any parts).  models: the kinds offered ("R" resistance,
+    "V" constant drop / diode, "C", "L"); dc: show the DC & Thermal fields (rating, board heat)."""
+
+    def __init__(self, parent, board, el, models=("R", "V"), dc=True):
+        super().__init__(parent, title="Element", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.board, self.result, self.el = board, None, el
+        self.models, self.dc = list(models), dc
         self.refs = sorted({p.ref for p in board.pads if p.layers}, key=EL.natural_key)
         self.part, self.pad = [], []
         g = wx.FlexGridSizer(0, 2, 6, 8)
@@ -148,22 +153,56 @@ class ElementDialog(wx.Dialog):
         self.R = wx.TextCtrl(self, value=EL.fmt_ohms(el.R).replace(" ", "").replace("Ω", "")
                              if el.R or el.auto else "")
         self.P = wx.TextCtrl(self, value=f"{el.P_rated:g}" if el.P_rated else "")
+        self.model = wx.RadioBox(self, label="Model", choices=[MODEL_LABELS[m] for m in self.models],
+                                 majorDimension=1, style=wx.RA_SPECIFY_COLS)
+        self.model.SetSelection(self.models.index(el.model) if el.model in self.models else 0)
+        xv = el.C if el.model == "C" else el.L if el.model == "L" else 0.0
+        from ..suite.library import fmt_si
+        self.X = wx.TextCtrl(self, value=fmt_si(xv, "").replace(" ", "") if xv else "")
+        self.X_label = wx.StaticText(self, label="Value")
+        self.Vf = wx.TextCtrl(self, value=f"{el.Vf:g}" if el.model == "V" else "0.7")
+        self.R_label = wx.StaticText(self, label="Resistance [Ω]")
+        self.model.Bind(wx.EVT_RADIOBOX, lambda e: self._model())
         self.heats = wx.CheckBox(self, label="Dissipates on the board (untick for an external load or wire)")
         self.heats.SetValue(el.heats)
         g.AddMany([(wx.StaticText(self, label="Name"), 0, wx.ALIGN_CENTER_VERTICAL), (self.name, 1, wx.EXPAND),
-                   (wx.StaticText(self, label="Resistance [Ω]"), 0, wx.ALIGN_CENTER_VERTICAL), (self.R, 1, wx.EXPAND),
-                   (wx.StaticText(self, label="Power rating [W]"), 0, wx.ALIGN_CENTER_VERTICAL), (self.P, 1, wx.EXPAND)])
+                   (wx.StaticText(self, label="Forward drop Vf [V]"), 0, wx.ALIGN_CENTER_VERTICAL), (self.Vf, 1, wx.EXPAND),
+                   (self.R_label, 0, wx.ALIGN_CENTER_VERTICAL), (self.R, 1, wx.EXPAND),
+                   (self.X_label, 0, wx.ALIGN_CENTER_VERTICAL), (self.X, 1, wx.EXPAND)])
+        self.P_label = wx.StaticText(self, label="Power rating [W]")
+        g.AddMany([(self.P_label, 0, wx.ALIGN_CENTER_VERTICAL), (self.P, 1, wx.EXPAND)])
         g.AddGrowableCol(1)
         top = wx.BoxSizer(wx.VERTICAL)
+        top.Add(self.model, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 10)
         top.Add(g, 0, wx.EXPAND | wx.ALL, 10)
         top.Add(self.heats, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-        top.Add(wx.StaticText(self, label="Values like 4k7, 0R1, 5m (milli), 1M (mega). Rating may be blank.\n"
-                                          "Pick any two pads: a resistor, a FET's drain-source R_on, an inductor's\n"
-                                          "DCR, a fuse, or an external load/wire between two connectors."),
-                0, wx.LEFT | wx.RIGHT, 10)
+        help_ = ("Values like 4k7, 0R1, 5m (milli), 1M (mega), 100n, 4u7." + (" Rating may be blank." if dc else "")
+                 + "\nPick any two pads: a resistor, a FET's drain-source R_on, an inductor's\n"
+                 "DCR, a fuse, or an external load/wire between two connectors.\n"
+                 "Constant drop: Vf plus the series R, conducting from pad A (anode)\n"
+                 "to pad B only, e.g. a diode; it blocks while V(A) − V(B) < Vf.")
+        if "C" in self.models:
+            help_ += "\nC and L are ideal (no ESR, ESL or SRF). A pad on a return net is the REF node."
+        top.Add(wx.StaticText(self, label=help_), 0, wx.LEFT | wx.RIGHT, 10)
+        if not dc:
+            for w in (self.P, self.P_label, self.heats):
+                w.Hide()
         top.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 10)
         self.SetSizerAndFit(top)
+        self._model()
         self.Bind(wx.EVT_BUTTON, self._ok, id=wx.ID_OK)
+
+    def _model(self):
+        m = self.models[self.model.GetSelection()]
+        v = m == "V"
+        self.Vf.Enable(v)
+        self.R.Enable(m in ("R", "V"))
+        self.X.Enable(m in ("C", "L"))
+        self.X_label.SetLabel({"C": "Capacitance [F]", "L": "Inductance [H]"}.get(m, "Value"))
+        self.R_label.SetLabel("Series resistance [Ω]" if v else "Resistance [Ω]")
+        if v and not self.R.GetValue().strip():
+            self.R.SetValue("0")
+        self.Layout()
 
     def _pads(self, k, sel=None):
         i = self.part[k].GetSelection()
@@ -185,25 +224,45 @@ class ElementDialog(wx.Dialog):
             return wx.MessageBox("Pick both pads.", "Element", parent=self)
         if a == b:
             return wx.MessageBox("The two pads must differ.", "Element", parent=self)
-        R = EL.parse_ohms(self.R.GetValue())
+        model = self.models[self.model.GetSelection()]
+        C = L = 0.0
+        if model in ("C", "L"):
+            from ..suite.library import parse_si
+            try:
+                xv = parse_si(self.X.GetValue())
+            except (ValueError, TypeError):
+                xv = -1
+            if not xv or xv <= 0:
+                return wx.MessageBox("Value: enter something like 100n, 4u7, 2.2p.", "Element", parent=self)
+            C, L = (xv, 0.0) if model == "C" else (0.0, xv)
+        R = EL.parse_ohms(self.R.GetValue()) if model in ("R", "V") else 0.0
         if R is None or R < 0:
             return wx.MessageBox("Resistance: enter a value such as 0.01, 10m, 4k7.", "Element", parent=self)
         try:
             P = float(self.P.GetValue()) if self.P.GetValue().strip() else None
         except ValueError:
             return wx.MessageBox("Power rating must be a number (or blank).", "Element", parent=self)
+        Vf = 0.0
+        if model == "V":
+            try:
+                Vf = float(self.Vf.GetValue().replace(",", "."))
+            except ValueError:
+                Vf = -1
+            if Vf < 0:
+                return wx.MessageBox("Forward drop: enter a voltage such as 0.7.", "Element", parent=self)
         name = self.name.GetValue().strip() or a.rsplit(".", 1)[0]
         heats = self.heats.GetValue()
         e = self.el
-        auto = e.auto and (a, b, R, P, name, heats) == (e.a, e.b, e.R, e.P_rated, e.name, e.heats)
-        self.result = EL.Element(name, a, b, R, P, True, auto, heats)
+        auto = e.auto and (a, b, R, P, name, heats, model, Vf) == (e.a, e.b, e.R, e.P_rated, e.name, e.heats,
+                                                                   e.model, e.Vf)
+        self.result = EL.Element(name, a, b, R, P, True, auto, heats, model, Vf, C, L)
         self.EndModal(wx.ID_OK)
 
 
 SETTINGS = [("pitch", "Grid pitch [mm] / auto"), ("t_plate", "Barrel plating [µm]"),
             ("T_cold", "Cu temp., no thermal [°C]"), ("T_amb", "Ambient [°C]"),
             ("h_conv", "h per face [W/m²K] (fixed)"), ("emissivity", "Emissivity (auto h)"),
-            ("k_fr4", "Dielectric k [W/mK]"),
+            ("k_fr4", "Dielectric k [W/mK]"), ("thermal_pitch", "Thermal cell [mm] (0 = finest)"),
             ("rho20", "Cu ρ @20 °C [Ω·m]"), ("b_height", "B-map distance [mm]"),
             ("pulse_scale", "Pulse amplitude [× table]"), ("pulse_ms", "Pulse length [ms]")]
 
@@ -304,7 +363,7 @@ class MainFrame(wx.Frame):
                                                    "any two pads you add)")
         eb = ebox.GetStaticBox()
         self.etree = _list(eb, [("On", 40), ("In circuit", 75), ("Name", 80), ("Pad A", 90), ("Pad B", 90),
-                                ("R", 90), ("Rating [W]", 80), ("Nets", 220), ("Heats board", 85),
+                                ("Value", 110), ("Rating [W]", 80), ("Nets", 220), ("Heats board", 85),
                                 ("Source", 60)])
         self.etree.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._el_edit())
         ebox.Add(self.etree, 1, wx.EXPAND | wx.ALL, 4)
@@ -516,7 +575,7 @@ class MainFrame(wx.Frame):
         auto_on = self.autor.GetValue()
         for e in self.elements:
             self.etree.Append(["✓" if e.enabled and (auto_on or not e.auto) else "–",
-                               "yes" if id(e) in used else "", e.name, e.a, e.b, EL.fmt_ohms(e.R),
+                               "yes" if id(e) in used else "", e.name, e.a, e.b, e.describe(),
                                f"{e.P_rated:g}" if e.P_rated else "", f"{nets.get(e.a, '?')} – {nets.get(e.b, '?')}",
                                "yes" if e.heats else "no (external)", "auto" if e.auto else "user"])
 

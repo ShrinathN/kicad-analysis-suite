@@ -461,3 +461,46 @@ def test_element_heat_spreads_over_pads():
     Ta = tm.solve(q, [(0, 0, "F.Cu", 0.5, pad.geom)])["F.Cu"].max()
     assert Ta < Tp
     assert float(np.sum(tm.heat(q, [(0, 0, "F.Cu", 0.5, pad.geom)]))) == pytest.approx(0.5)
+
+
+# ---- constant-drop (diode) elements -------------------------------------------
+def test_diode_forward_drop_and_heat():
+    b = supply_board()
+    rows = [S.Row("vin", ["J1.1"], ["J1G.1"], 5.0, kind="V")]
+    d = EL.Element("D1", "J2.1", "J2G.1", 0.5, model="V", Vf=0.7)
+    r = S.simulate(b, rows, cold(), progress=lambda m: None, elements=[d])
+    I = (5.0 - 0.7) / (0.5 + 2 * 19 * RS_SHEET)
+    e = r.elements[0]
+    assert e["conducting"] and e["I_A"] == pytest.approx(I, rel=1e-3)
+    assert e["V_mV"] == pytest.approx((0.7 + 0.5 * I) * 1e3, rel=1e-3)
+    assert e["P_W"] == pytest.approx(I * (0.7 + 0.5 * I), rel=1e-3)
+
+
+def test_reverse_diode_blocks():
+    b = supply_board()
+    rows = [S.Row("vin", ["J1.1"], ["J1G.1"], 5.0, kind="V")]
+    d = EL.Element("D1", "J2G.1", "J2.1", 0.0, model="V", Vf=0.7)         # cathode on VIN
+    load = EL.Element("RL", "J2.1", "J2G.1", 10.0)
+    r = S.simulate(b, rows, cold(), progress=lambda m: None, elements=[d, load])
+    assert not r.elements[0]["conducting"] and r.elements[0]["I_A"] == 0
+    assert r.elements[1]["I_A"] == pytest.approx(5.0 / (10 + 2 * 19 * RS_SHEET), rel=1e-3)
+    with pytest.raises(S.SimError, match="D1"):                          # a current forced backwards
+        S.simulate(b, [S.Row("i", ["J1.1"], ["J1G.1"], 1.0)], cold(), progress=lambda m: None, elements=[d])
+
+
+def test_diode_below_vf_stays_off():
+    b = supply_board()
+    rows = [S.Row("vin", ["J1.1"], ["J1G.1"], 0.5, kind="V")]
+    d = EL.Element("D1", "J2.1", "J2G.1", 0.0, model="V", Vf=0.7)
+    load = EL.Element("RL", "J2.1", "J2G.1", 10.0)
+    r = S.simulate(b, rows, cold(), progress=lambda m: None, elements=[d, load])
+    assert not r.elements[0]["conducting"]
+    assert r.elements[1]["I_A"] == pytest.approx(0.5 / (10 + 2 * 19 * RS_SHEET), rel=1e-3)
+
+
+def test_parse_diode_element():
+    from pcb_current_sim.cli import parse_element
+    e = parse_element("D1.2-D1.1=0.45V+20m:D1")
+    assert (e.model, e.Vf, e.R, e.name) == ("V", 0.45, pytest.approx(0.02), "D1")
+    assert parse_element("D1.2-D1.1=0.7v").R == 0.0
+    assert parse_element("R1.1-R1.2=4k7").model == "R"

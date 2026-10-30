@@ -1,8 +1,9 @@
 # kicad-analysis-suite
 
-**PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has two tools so far:
+**PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has three tools so far:
 
 - **DC & Thermal**: current density, IR drop and temperature on a real board, including resistance elements, current pulses (fusing) and magnetic field maps.
+- **Trace R/L/C → SPICE**: R, L, C, Z₀ and delay of the copper between any pads, from a 2D field solve of each cross-section, exported as a SPICE RLC subcircuit.
 - **Matching & Tolerance**: draw an RF matching network with real parts, then see whether it still meets its specs across part tolerances.
 
 More tools (PDN, 3D extraction, full-wave export, signal integrity) are planned. See the [roadmap](docs/ROADMAP.md).
@@ -26,6 +27,16 @@ Pick the pads where current enters and leaves, or add voltage sources and loads,
 - Tables per pad, via, track and element; export to PDF, HTML, CSV, PNG/SVG and ParaView.
 
 ![DC & Thermal window](docs/screenshots/dc_main.png)
+
+## Trace R/L/C → SPICE
+
+Pick two or more pads on one net and the return nets. The tool follows the copper between the pads (tracks, arcs, vias, stubs), solves the field of every cross-section against the return copper, and builds an RLC ladder.
+
+- Any geometry: microstrip, stripline, coplanar lines, and a GND pour on the other side of a 2-layer board, all from one 2D field solver (within 2 % of Hammerstad–Jensen and Wheeler).
+- DC R from the board's real copper (the DC solver), L and C per segment, via L and C, pad C, open stubs.
+- Copper pours as real conductors: meshed over their return plane and reduced exactly to R, L and C between everything that touches them.
+- Resistors, diodes, capacitors and inductors between any two pads, also across nets (trace → part → trace), with return-net pads as the reference.
+- Outputs: per-path totals, a segment table with Z₀ and the return found, the path coloured by Z₀ with impedance steps marked, a drawn schematic of the ladder, and a `.subckt` of plain R, L and C that runs in any SPICE.
 
 ## Matching & Tolerance
 

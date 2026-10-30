@@ -18,9 +18,11 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from . import linsolve as LS
 from . import raster as rz
 
-MAX_CELLS = 300_000      # thermal cells per layer
+MAX_CELLS = 300_000      # thermal cells per layer, hard cap
+PITCH = 0.3              # mm, default thermal cell: heat spreads over millimetres, so a finer grid buys nothing
 RHOC_CU = 3.45e6         # J/m^3K (8960 kg/m^3 x 385 J/kgK)
 RHOC_FR4 = 2.0e6         # J/m^3K (1850 kg/m^3 x 1100 J/kgK)
 SIGMA = 5.670e-8         # W/m^2K^4
@@ -36,8 +38,10 @@ def h_surface(s, rise, L_char):
 
 
 class ThermalModel:
-    def __init__(self, board, grid, thick, s, bbox=None):
-        """bbox: thermal extent (x0, y0, x1, y1) in mm; default = the electrical grid."""
+    def __init__(self, board, grid, thick, s, bbox=None, pitch=PITCH):
+        """bbox: thermal extent (x0, y0, x1, y1) in mm; default = the electrical grid.
+        pitch: target thermal cell [mm], rounded to a multiple of the electrical pitch (None =
+        as fine as MAX_CELLS allows)."""
         self.grid, self.s, self.layers = grid, s, board.copper_layers
         if bbox is None:
             x0, y0 = grid.x0, grid.y0
@@ -48,6 +52,8 @@ class ThermalModel:
             x1, y1 = max(x1, grid.x0 + grid.nx * grid.h), max(y1, grid.y0 + grid.ny * grid.h)
         cells = (x1 - x0) * (y1 - y0) / grid.h ** 2
         c = max(1, math.ceil(math.sqrt(cells / MAX_CELLS)))
+        if pitch:
+            c = max(c, int(round(pitch / grid.h)))
         # align the thermal origin with the electrical grid so each fine cell lies in one coarse cell
         ox = grid.x0 - math.ceil((grid.x0 - x0) / grid.h - 1e-9) * grid.h
         oy = grid.y0 - math.ceil((grid.y0 - y0) / grid.h - 1e-9) * grid.h
@@ -118,10 +124,22 @@ class ThermalModel:
                                if g is not None] for k in range(nL)]
         if nL == 1:
             self.adjacent_gaps = [[board.thickness * 1e-3]]
-        # symmetric minimum-degree ordering: ~3x faster and ~2.5x less fill than COLAMD on grid Laplacians
-        self.lu = spla.splu(A.tocsc(), permc_spec="MMD_AT_PLUS_A", options=dict(SymmetricMode=True))
+        self.lu = LS.factorize(self.A)
+        self.A_init = self.A
         self.idx, self.nm, self.n = idx, nm, n
         self.T = None         # last coarse result, dict layer -> (nyc, nxc)
+
+    def reset(self, s=None):
+        """Back to the state after construction (surface h, no result), so a cached model can be
+        reused for a new run: the factorisation depends only on the board and the settings that
+        build the matrix.  s: the new run's settings (ambient, emissivity, h_auto may differ)."""
+        self.s = s or self.s
+        self.h = np.full(self.n, float(self.s.h_conv))
+        self.A = self.A_init
+        self.T = None
+        self.__dict__.pop("C_dt", None)
+        self.__dict__.pop("lu_t", None)
+        return self
 
     def solve(self, q_fine, point_heat=()):
         """q_fine: layer -> (ny, nx) W per fine cell. Returns layer -> fine T [C]."""
@@ -168,8 +186,7 @@ class ThermalModel:
     def begin_transient(self, C, dt):
         """Implicit Euler: (C/dt + A) theta_new = C/dt theta + heat."""
         self.C_dt = C / dt
-        self.lu_t = spla.splu((self.A + sp.diags(self.C_dt)).tocsc(), permc_spec="MMD_AT_PLUS_A",
-                              options=dict(SymmetricMode=True))
+        self.lu_t = LS.factorize((self.A + sp.diags(self.C_dt)).tocsc())
 
     def step(self, theta, heat):
         return self.lu_t.solve(self.C_dt * theta + heat)

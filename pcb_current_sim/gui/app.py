@@ -107,11 +107,11 @@ class RowDialog(tk.Toplevel):
 
 
 class ElementDialog(tk.Toplevel):
-    """Edit one resistance element: two pads (any parts), R, optional power rating."""
+    """Edit one element: two pads (any parts), a resistance or a constant drop (diode), optional rating."""
 
     def __init__(self, master, board, el):
         super().__init__(master)
-        self.title("Resistance element")
+        self.title("Element")
         self.transient(master)
         self.board, self.result, self.el = board, None, el
         refs = sorted({p.ref for p in board.pads if p.layers}, key=EL.natural_key)
@@ -136,6 +136,15 @@ class ElementDialog(tk.Toplevel):
         self.R = tk.StringVar(value=EL.fmt_ohms(el.R).replace(" ", "").replace("Ω", "") if el.R or el.auto else "")
         self.P = tk.StringVar(value=f"{el.P_rated:g}" if el.P_rated else "")
         self.heats = tk.BooleanVar(value=el.heats)
+        self.model = tk.StringVar(value=el.model)
+        self.Vf = tk.StringVar(value=f"{el.Vf:g}" if el.model == "V" else "0.7")
+        mf = ttk.Frame(f)
+        mf.grid(row=6, column=0, columnspan=3, sticky="w")
+        ttk.Label(mf, text="Model").pack(side="left")
+        ttk.Radiobutton(mf, text="Resistance", value="R", variable=self.model).pack(side="left", padx=4)
+        ttk.Radiobutton(mf, text="Constant drop (diode, A → B)  Vf [V]", value="V",
+                        variable=self.model).pack(side="left")
+        ttk.Entry(mf, textvariable=self.Vf, width=6).pack(side="left", padx=4)
         ttk.Checkbutton(f, text="Dissipates on the board (untick for an external load or wire)",
                         variable=self.heats).grid(row=7, column=0, columnspan=3, sticky="w")
         for k, (label, var) in enumerate((("Name", self.name), ("Resistance [Ω]", self.R),
@@ -146,7 +155,8 @@ class ElementDialog(tk.Toplevel):
         ttk.Label(f, foreground="#666", text="Values like 4k7, 0R1, 5m (milli), 1M (mega). Rating may be blank.\n"
                                              "Pick any two pads: a resistor, a FET's drain-source R_on, an "
                                              "inductor's\nDCR, a fuse, or an external load/wire between two "
-                                             "connectors.").grid(row=5, column=0, columnspan=3, sticky="w", pady=6)
+                                             "connectors.\nConstant drop: Vf plus the resistance (in series), "
+                                             "conducting from\npad A (anode) to pad B only, e.g. a diode.").grid(row=5, column=0, columnspan=3, sticky="w", pady=6)
         b = ttk.Frame(f)
         b.grid(row=8, column=0, columnspan=3, sticky="e")
         ttk.Button(b, text="OK", command=self._ok).pack(side="right")
@@ -185,11 +195,20 @@ class ElementDialog(tk.Toplevel):
             P = float(self.P.get()) if self.P.get().strip() else None
         except ValueError:
             return messagebox.showerror("Element", "Power rating must be a number (or blank).", parent=self)
+        model, Vf = self.model.get(), 0.0
+        if model == "V":
+            try:
+                Vf = float(self.Vf.get().replace(",", "."))
+            except ValueError:
+                Vf = -1
+            if Vf < 0:
+                return messagebox.showerror("Element", "Forward drop: enter a voltage such as 0.7.", parent=self)
         name = self.name.get().strip() or a.rsplit(".", 1)[0]
         e = self.el
         heats = self.heats.get()
-        auto = e.auto and (a, b, R, P, name, heats) == (e.a, e.b, e.R, e.P_rated, e.name, e.heats)
-        self.result = EL.Element(name, a, b, R, P, True, auto, heats)
+        auto = e.auto and (a, b, R, P, name, heats, model, Vf) == (e.a, e.b, e.R, e.P_rated, e.name, e.heats,
+                                                                   e.model, e.Vf)
+        self.result = EL.Element(name, a, b, R, P, True, auto, heats, model, Vf)
         self.destroy()
 
 
@@ -259,7 +278,7 @@ class App(tk.Tk):
         body.add(ef, weight=2)
         cols = ("on", "used", "name", "a", "b", "R", "P", "nets", "heats", "src")
         self.etree = ttk.Treeview(ef, columns=cols, show="headings", height=5, selectmode="extended")
-        for c, t, w in zip(cols, ("On", "In circuit", "Name", "Pad A", "Pad B", "R", "Rating [W]", "Nets",
+        for c, t, w in zip(cols, ("On", "In circuit", "Name", "Pad A", "Pad B", "Value", "Rating [W]", "Nets",
                                    "Heats board", "Source"), (40, 75, 80, 90, 90, 90, 80, 220, 85, 60)):
             self.etree.heading(c, text=t)
             self.etree.column(c, width=w, anchor="w")
@@ -285,6 +304,7 @@ class App(tk.Tk):
                 ("h_conv", "Heat transfer h per face, fixed [W/m²K]", "12"),
                 ("emissivity", "Emissivity (auto h)", "0.9"),
                 ("k_fr4", "Dielectric k [W/mK]", "0.3"),
+                ("thermal_pitch", "Thermal cell [mm] (0 = finest)", "0.3"),
                 ("rho20", "Cu resistivity @20 °C [Ω·m]", "1.72e-8"),
                 ("b_height", "B-map distance from board [mm]", "1"),
                 ("pulse_scale", "Pulse amplitude [× table]", "1"),
@@ -466,7 +486,7 @@ class App(tk.Tk):
         for k, e in enumerate(self.elements):
             self.etree.insert("", "end", iid=str(k), values=(
                 "✓" if e.enabled and (self.autor.get() or not e.auto) else "–", "yes" if id(e) in used else "",
-                e.name, e.a, e.b, EL.fmt_ohms(e.R), f"{e.P_rated:g}" if e.P_rated else "",
+                e.name, e.a, e.b, e.describe(), f"{e.P_rated:g}" if e.P_rated else "",
                 f"{nets.get(e.a, '?')} – {nets.get(e.b, '?')}", "yes" if e.heats else "no (external)",
                 "auto" if e.auto else "user"))
 

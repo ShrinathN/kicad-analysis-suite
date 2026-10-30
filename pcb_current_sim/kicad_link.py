@@ -51,6 +51,16 @@ class KiCadLink:
                 ids.append(best.id)
         return ids
 
+    def select_items(self, uuids):
+        """Select the tracks and vias with these uuids in the PCB editor; returns how many."""
+        uuids = set(uuids)
+        items = [it for it in list(self.board.get_tracks()) + list(self.board.get_vias())
+                 if str(getattr(getattr(it, "id", None), "value", "")) in uuids]
+        self.board.clear_selection()
+        if items:
+            self.board.add_to_selection(items)
+        return len(items)
+
     def save(self):
         self.board.save()
 

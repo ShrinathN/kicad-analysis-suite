@@ -326,16 +326,33 @@ def ring_cells(R, hole, layer, net_id):
     return np.zeros(0, np.int64)
 
 
-def coverage_all(board, grid, S=2):
-    """Coverage of all copper (every net) per layer, for thermal spreading."""
-    out = {L: np.zeros(grid.shape, np.float32) for L in board.copper_layers}
+def coverage_all(board, grid, sub=0.03, faces=False):
+    """Copper fraction of each cell (every net) per layer, for thermal spreading.
+
+    Primitives are OR-ed on a sub-lattice of about `sub` mm and averaged per cell, so copper of
+    several primitives in one coarse cell adds up (a per-primitive maximum would not).
+    faces=True also returns the copper fraction of the faces between neighbouring cells:
+    {layer: (f, apx (ny, nx-1), apy (ny-1, nx))}, apx[j, i] being the face between i and i+1."""
+    S = max(2, min(16, math.ceil(grid.h / sub)))
+    hs = grid.h / S
+    masks = {L: np.zeros((grid.ny * S, grid.nx * S), bool) for L in board.copper_layers}
 
     def paint(geom, L):
-        res = coverage(geom, grid, S)
-        if res is not None:
-            j0, j1, i0, i1, cov = res
-            sl = (slice(j0, j1), slice(i0, i1))
-            np.maximum(out[L][sl], cov, out=out[L][sl])
+        x0, y0, x1, y1 = geom.bbox
+        i0 = max(0, int(math.floor((x0 - grid.x0) / hs)))
+        i1 = min(grid.nx * S, int(math.ceil((x1 - grid.x0) / hs)) + 1)
+        j0 = max(0, int(math.floor((y0 - grid.y0) / hs)))
+        j1 = min(grid.ny * S, int(math.ceil((y1 - grid.y0) / hs)) + 1)
+        if i1 <= i0 or j1 <= j0:
+            return
+        xs = grid.x0 + (np.arange(i0, i1) + 0.5) * hs
+        ys = grid.y0 + (np.arange(j0, j1) + 0.5) * hs
+        if hasattr(geom, "lattice"):
+            m = geom.lattice(xs, ys)
+        else:
+            X, Y = np.meshgrid(xs, ys)
+            m = geom.inside(X, Y)
+        masks[L][j0:j1, i0:i1] |= m
 
     for z in board.zones:
         paint(z.geom, z.layer)
@@ -348,4 +365,16 @@ def coverage_all(board, grid, S=2):
         if p.geom is not None:
             for L in p.layers:
                 paint(p.geom, L)
+    out = {}
+    for L, m in masks.items():
+        f = m.reshape(grid.ny, S, grid.nx, S).mean(axis=(1, 3), dtype=np.float32)
+        if not faces:
+            out[L] = f
+            continue
+        # a face carries copper where the sub-cells on both sides of it are copper
+        fx = m[:, S - 1:-1:S] & m[:, S::S]                   # (ny*S, nx-1)
+        fy = m[S - 1:-1:S, :] & m[S::S, :]                   # (ny-1, nx*S)
+        apx = fx.reshape(grid.ny, S, grid.nx - 1).mean(axis=1, dtype=np.float32)
+        apy = fy.reshape(grid.ny - 1, grid.nx, S).mean(axis=2, dtype=np.float32)
+        out[L] = (f, apx, apy)
     return out

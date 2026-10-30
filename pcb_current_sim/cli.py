@@ -10,6 +10,7 @@ Voltage sources and loads use the same syntax: --vsource "U1.5>U1.2:3.3:3V3"
 
 Resistor footprints reached from the rows are included automatically.  Add
 any other two-pad resistance with --element PAD_A-PAD_B=OHMS[:NAME[:WATTS]][:ext]
+(a diode / constant drop: OHMS = VOLTSv[+OHMS], e.g. D1.2-D1.1=0.45V+20m, anode first)
 (e.g. "Q1.2-Q1.3=0.004:Q1" for a FET's R_on, "L1.1-L1.2=12m:L1"; ":ext" = an off-board load
 or wire whose dissipation does not heat the board, e.g. "J2.1-J2.2=2.4:LOAD:ext").
 """
@@ -38,11 +39,20 @@ def parse_element(text):
     ext = text.rstrip().endswith(":ext")
     text = text.rstrip()[:-4] if ext else text
     m = re.fullmatch(r"\s*([^-=\s]+)-([^=\s]+)=([^:]+)(?::([^:]*))?(?::([0-9.eE+-]+))?\s*", text)
-    R = parse_ohms(m.group(3)) if m else None
+    model, Vf, R = "R", 0.0, None
+    if m:
+        d = re.fullmatch(r"\s*([0-9.]+(?:[eE][-+]?\d+)?)[vV]\s*(?:\+(.+))?", m.group(3))
+        if d:
+            model, Vf = "V", float(d.group(1))
+            R = parse_ohms(d.group(2)) if d.group(2) else 0.0
+        else:
+            R = parse_ohms(m.group(3))
     if R is None:
-        raise argparse.ArgumentTypeError(f"bad element '{text}' (expected PAD_A-PAD_B=OHMS[:NAME[:WATTS]])")
+        raise argparse.ArgumentTypeError(f"bad element '{text}' (expected PAD_A-PAD_B=OHMS[:NAME[:WATTS]], "
+                                         "or PAD_A-PAD_B=VOLTSv[+OHMS] for a diode)")
     name = m.group(4) or m.group(1).split(".")[0]
-    return Element(name, m.group(1), m.group(2), R, float(m.group(5)) if m.group(5) else None, heats=not ext)
+    return Element(name, m.group(1), m.group(2), R, float(m.group(5)) if m.group(5) else None, heats=not ext,
+                   model=model, Vf=Vf)
 
 
 def parse_thickness(text):
@@ -63,7 +73,8 @@ def main(argv=None):
                                     "(from ambient, or from the steady state)")
     ap.add_argument("--no-magnetic", action="store_true", help="skip B maps and loop inductance")
     ap.add_argument("--b-height", type=float, default=1.0, help="B-map distance from the board [mm]")
-    ap.add_argument("--element", action="append", default=[], help="PAD_A-PAD_B=OHMS[:NAME[:WATTS]]")
+    ap.add_argument("--element", action="append", default=[], help="PAD_A-PAD_B=OHMS[:NAME[:WATTS]], or "
+                    "PAD_A-PAD_B=VOLTSv[+OHMS] (diode, anode first)")
     ap.add_argument("--no-auto-resistors", action="store_true", help="ignore resistor footprints")
     ap.add_argument("--no-crop", action="store_true", help="grid over the whole board")
     ap.add_argument("--scenario", help="JSON scenario file saved by the GUI")

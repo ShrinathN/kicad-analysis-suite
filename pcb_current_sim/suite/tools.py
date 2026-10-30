@@ -18,6 +18,8 @@ TOOLS = (
          "Current density, IR drop, resistance elements, electro-thermal, pulse / fusing, DC B-field.", True),
     Tool("pdn", "PDN (AC)", "POWER",
          "Z(f) against target impedance, decaps, VRM, plane resonances, loop L(f)."),
+    Tool("extract", "Trace R/L/C → SPICE", "SIGNAL & FIELDS",
+         "R, L, C, Z₀ and delay of the copper between any pads (2D field solve); SPICE RLC subcircuit.", True),
     Tool("si", "SI & Fields", "SIGNAL & FIELDS",
          "Trace Z₀ and εeff, crosstalk, return path at frequency, HV E-field and clearance."),
     Tool("extract3d", "3D extraction", "SIGNAL & FIELDS",

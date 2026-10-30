@@ -76,6 +76,19 @@ def _body(path, kind, L, label=None):
         path.AddRectangle(a + 4, -9, BODY - 8, 18)
         path.MoveToPoint(b - 4, 0)
         path.AddLineToPoint(L, 0)
+    elif kind == "D":                      # anode at 0, cathode at L
+        hw = 12
+        c = L / 2
+        path.MoveToPoint(0, 0)
+        path.AddLineToPoint(c - hw, 0)
+        path.MoveToPoint(c - hw, -hw)
+        path.AddLineToPoint(c + hw, 0)
+        path.AddLineToPoint(c - hw, hw)
+        path.CloseSubpath()
+        path.MoveToPoint(c + hw, -hw)
+        path.AddLineToPoint(c + hw, hw)
+        path.MoveToPoint(c + hw, 0)
+        path.AddLineToPoint(L, 0)
     elif kind == "S2P":
         path.MoveToPoint(0, 0)
         path.AddLineToPoint(a, 0)

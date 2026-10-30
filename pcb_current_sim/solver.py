@@ -3,20 +3,22 @@
 Nodes: copper cells (per layer), one node per (plated hole, layer), one
 super-node per excitation side and one per element pad.  Each row injects +I
 at its source super-node and -I at its sink; all rows are solved together.
-Lumped elements (resistors, user-defined resistances) join two pad
-electrodes, possibly on different nets.
+Lumped elements (resistors, user-defined resistances, constant drops) join
+two pad electrodes, possibly on different nets.  Constant-drop elements are
+one-way (diodes): solve() iterates their on/off states until consistent.
 """
 import math
 import time
-from dataclasses import dataclass, field, replace
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import astuple, dataclass, field, replace
 
 import numpy as np
 import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 from scipy.sparse.csgraph import connected_components
 
 from . import raster as rz
 from . import elements as EL
+from . import linsolve as LS
 
 T_MELT = 1083.0
 RESOLVE_K = 20.0        # pulse: full electrical re-solve once copper T has moved this much
@@ -83,6 +85,7 @@ class Settings:
     auto_resistors: bool = True     # include resistor footprints reached from the rows
     crop: bool = True               # grid only around the simulated copper
     thermal_margin: float = 20.0    # mm of board kept around it for heat spreading
+    thermal_pitch: float = 0.3      # mm, thermal cell (0 = as fine as the cell cap allows)
     magnetic: bool = True           # B-field planes and loop inductance
     b_height: float = 1.0           # mm above the top / below the bottom surface for the B maps
     pulse: bool = False             # transient thermal response to a rectangular pulse
@@ -99,24 +102,8 @@ OFFSET = {1: (0, 1), 0: (1, 0)}
 
 
 def solve_spd(A, b):
-    n = A.shape[0]
-    if n == 0:
-        return np.zeros(0)
-    if n > 150_000:
-        try:
-            import pyamg
-            ml = pyamg.smoothed_aggregation_solver(A.tocsr(), symmetry="symmetric")
-            return ml.solve(b, tol=1e-10, accel="cg", maxiter=1000)
-        except ImportError:
-            pass
-    try:
-        lu = spla.splu(A.tocsc(), permc_spec="MMD_AT_PLUS_A", options=dict(SymmetricMode=True))
-        return lu.solve(b)
-    except MemoryError:
-        d = A.diagonal()
-        M = sp.diags(1 / d)
-        x, info = spla.cg(A, b, M=M, rtol=1e-10, maxiter=20 * n)
-        return x
+    """Solve A x = b for an SPD A; b may be a vector or (n, k) columns (result has b's shape)."""
+    return LS.solve(A, b)
 
 
 class Network:
@@ -159,6 +146,9 @@ class Network:
                 pair.append(self._electrode(ids, f"Row '{row.name}'", (r, side), self.elinks))
             self.super.append(tuple(pair))
         self.elements, self.enodes, self.xlinks = list(elements), [], []
+        self.el_on = np.ones(len(self.elements), bool)      # conduction state (diodes may switch off)
+        self.el_Vf = np.array([e.Vf if e.model == "V" else 0.0 for e in self.elements])
+        self.el_oneway = np.array([e.model == "V" for e in self.elements], bool)
         for k, e in enumerate(self.elements):
             self.enodes.append(tuple(self._electrode([pid], f"Element {e.name}", (("el", k), pin), self.xlinks)
                                      for pin, pid in (("a", e.a), ("b", e.b))))
@@ -197,22 +187,52 @@ class Network:
         return self.s.rho20 * (1 + self.s.alpha * (T - 20.0))
 
     def solve(self, T=None):
-        """Operating point. T: dict layer -> (ny, nx) temperature array, or None for T_cold."""
-        asm = self._assemble(T)
-        rhs = np.zeros(self.n)
-        for (src, snk), row, gs in zip(self.super, self.rows, asm["Gs"]):
+        """Operating point. T: dict layer -> (ny, nx) temperature array, or None for T_cold.
+        Diode states start from the previous solve and are flipped until no conducting diode
+        carries reverse current and no blocking one is forward biased beyond Vf."""
+        base = np.zeros(self.n)
+        for (src, snk), row in zip(self.super, self.rows):
             v = row.value
             if row.kind == "V":
-                rhs[src] += v * gs
-                rhs[snk] -= v * gs
+                base[src] += v * G_SOURCE
+                base[snk] -= v * G_SOURCE
             elif row.kind == "load":
-                rhs[src] -= v
-                rhs[snk] += v
+                base[src] -= v
+                base[snk] += v
             else:
-                rhs[src] += v
-                rhs[snk] -= v
-        V = self._solve_system(asm["A"], asm["off"], rhs[:, None], [(row, src, snk) for (src, snk), row
-                                                                     in zip(self.super, self.rows)])[:, 0]
+                base[src] += v
+                base[snk] -= v
+        pairs = [(row, src, snk) for (src, snk), row in zip(self.super, self.rows)]
+        seen = set()
+        while True:
+            asm = self._assemble(T)
+            rhs = base.copy()
+            for (a, b), G, vf in zip(self.enodes, asm["G_el"], self.el_Vf):
+                rhs[a] += G * vf
+                rhs[b] -= G * vf
+            try:
+                V = self._solve_system(asm["A"], asm["off"], rhs[:, None], pairs)[:, 0]
+            except SimError as e:
+                off = [el.name for el, on in zip(self.elements, self.el_on) if not on]
+                if off:
+                    raise SimError(f"{e} Blocking diode element(s): {', '.join(off)} (check their direction: "
+                                   "pad A is the anode).") from None
+                raise
+            if not self.el_oneway.any():
+                break
+            seen.add(self.el_on.tobytes())
+            a = np.array([p for p, _ in self.enodes], np.int64)
+            b = np.array([q for _, q in self.enodes], np.int64)
+            fwd = V[a] - V[b] - self.el_Vf                    # NaN where a side is unexcited
+            new = self.el_on.copy()
+            new[self.el_oneway & self.el_on & ~(fwd >= -1e-12)] = False
+            new[self.el_oneway & ~self.el_on & (fwd > 1e-12)] = True
+            if (new == self.el_on).all():
+                break
+            self.el_on = new
+            if new.tobytes() in seen:
+                self.R.warnings.append("Diode element states did not settle (oscillating); result may be off.")
+                break
         return self._post(V, T, asm)
 
     def solve_unit_rows(self, T=None):
@@ -244,7 +264,7 @@ class Network:
             Vs = self._solve_system(A, off, rhs, pairs, strict=False)
             for c, r in enumerate(rs):
                 if Vs is not None and np.isfinite(Vs[self.super[r][0], c]):
-                    out[r] = self._post(Vs[:, c], T, asm, light=True)
+                    out[r] = self._post(Vs[:, c], T, dict(asm, Vf_el=0 * self.el_Vf), light=True)
         return out
 
     # ------------------------------------------------------------------
@@ -296,10 +316,13 @@ class Network:
         if self.elinks or self.xlinks:
             e = np.array([(sn, nd, gg) for sn, nd, gg, *_ in self.elinks + self.xlinks])
             A_i.append(e[:, 0].astype(np.int64)); A_j.append(e[:, 1].astype(np.int64)); A_g.append(e[:, 2])
-        G_el = np.array([1 / max(e.R, EL.R_MIN) for e in self.elements])
-        if self.elements:
-            A_i.append(np.array([a for a, b in self.enodes])); A_j.append(np.array([b for a, b in self.enodes]))
-            A_g.append(G_el)
+        # DC limit of reactive elements: a capacitor is open, an inductor an ideal link
+        G_el = np.array([0.0 if (not on or e.model == "C") else 1 / (EL.R_MIN if e.model == "L" else max(e.R, EL.R_MIN))
+                         for e, on in zip(self.elements, self.el_on)])
+        on = np.flatnonzero(G_el)
+        if on.size:
+            A_i.append(np.array([self.enodes[k][0] for k in on])); A_j.append(np.array([self.enodes[k][1] for k in on]))
+            A_g.append(G_el[on])
         # voltage sources: Norton equivalent, a stiff conductance between the two terminals
         Gs = [G_SOURCE if row.kind == "V" else 0.0 for row in self.rows]
         for (src, snk), gs in zip(self.super, Gs):
@@ -313,7 +336,7 @@ class Network:
         off = (off + off.T).tocsr()
         A = (sp.diags(np.asarray(off.sum(1)).ravel()) - off).tocsr()
         return dict(A=A, off=off, links=links, ring_links=ring_links, barrel_links=barrel_links,
-                    G_el=G_el, Gs=Gs)
+                    G_el=G_el, Vf_el=self.el_Vf, Gs=Gs)
 
     def _solve_system(self, A, off, rhs, pairs, strict=True):
         """Solve A V = rhs (columns) with one grounded node per excited component.
@@ -399,9 +422,9 @@ class Network:
         if self._pk:
             I = np.bincount(self._pidx, self._pg * np.nan_to_num(V[self._psn] - V[self._pnd]), len(self._pk))
             sol.pad_current = dict(zip(self._pk, I.tolist()))
-        for (a, b), G in zip(self.enodes, asm["G_el"]):
+        for (a, b), G, vf in zip(self.enodes, asm["G_el"], asm["Vf_el"]):
             dV = float(np.nan_to_num(V[a] - V[b]))
-            sol.element_I.append(G * dV)
+            sol.element_I.append(G * (dV - vf))
             sol.element_dV.append(dV)
         return sol
 
@@ -566,6 +589,21 @@ def run_pulse(net, tm, thick, s, base, progress):
                 coarse=coarse, fine=T_f, frames=frames)
 
 
+_CACHE = {}     # kind -> (key, board, value): the last raster / thermal model, reused while nothing changed
+
+
+def cached(kind, board, key, make):
+    """(value, hit): reuse the last value of this kind if it was made for the same board object
+    and key, else make() it.  Rasters and thermal models depend only on the board and settings,
+    not on the excitation, so re-running with new currents skips their setup."""
+    hit = _CACHE.get(kind)
+    if hit is not None and hit[1] is board and hit[0] == key:
+        return hit[2], True
+    value = make()
+    _CACHE[kind] = (key, board, value)
+    return value, False
+
+
 def simulate(board, rows, settings=None, progress=print, elements=None):
     """elements: list of elements.Element, or None to auto-detect resistors (if enabled)."""
     from .thermal import ThermalModel
@@ -587,14 +625,43 @@ def simulate(board, rows, settings=None, progress=print, elements=None):
     grid = rz.make_grid(board, pitch, bbox=box)
     progress(f"Rasterising {len(nets)} net(s) at {pitch * 1000:g} µm ({grid.nx} x {grid.ny} x "
              f"{len(board.copper_layers)} layers)...")
-    R = rz.rasterise(board, nets, grid)
-    R.warnings += warnings
+    R, hit = cached("raster", board, (tuple(nets), astuple(grid)), lambda: rz.rasterise(board, nets, grid))
+    R = replace(R, warnings=list(R.warnings) + warnings)       # the cached raster stays untouched
     net = Network(board, R, rows, s, thick, els)
+
+    # independent work runs in threads (the sparse factorisations release the GIL)
+    pool = ThreadPoolExecutor(max_workers=3)
+    th_keys = (tuple(sorted(thick.items())), s.k_cu, s.k_fr4, s.h_conv, s.t_plate)
+
+    def thermal_model(kind, bbox, tpitch):
+        tm, hit = cached(kind, board, (astuple(grid), bbox, tpitch) + th_keys,
+                         lambda: ThermalModel(board, grid, thick, s, bbox=bbox, pitch=tpitch))
+        return tm.reset(s)
+    f_tm = pool.submit(thermal_model, "thermal", thermal_box(board, box, s), s.thermal_pitch or None) \
+        if s.thermal else None
+    reach = min(s.thermal_margin, max(2.0, 3e3 * math.sqrt(1.1e-4 * s.pulse_ms * 1e-3)))
+    # a short pulse heats a small region (heat spreads ~sqrt(alpha_cu t)): tighter, finer domain
+    f_pulse = pool.submit(thermal_model, "pulse", thermal_box(board, box, s, reach) if box else None,
+                          min(s.thermal_pitch, reach / 10) if s.thermal_pitch else None) if s.pulse else None
+
+    def coarse_solve():
+        g2 = rz.Grid(grid.x0, grid.y0, grid.h * 2, -(-grid.nx // 2), -(-grid.ny // 2))
+        try:
+            R2, _ = cached("raster2", board, (tuple(nets), astuple(g2)), lambda: rz.rasterise(board, nets, g2))
+            return Network(board, replace(R2, warnings=[]), rows, s, thick, els).solve(None), None
+        except SimError as e:
+            return None, str(e)
+    f_coarse = pool.submit(coarse_solve) if s.error_estimate else None
+
     progress(f"Solving {net.n:,} nodes...")
-    cold = net.solve(None)
+    try:
+        cold = net.solve(None)
+    except BaseException:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
     sol, tm, iters, converged, runaway = cold, None, 0, True, False
     if s.thermal:
-        tm = ThermalModel(board, grid, thick, s, bbox=thermal_box(board, box, s))
+        tm = f_tm.result()
         progress(f"Electro-thermal loop ({tm.n:,} thermal nodes)...")
         T = {L: np.full(grid.shape, s.T_amb, np.float32) for L in board.copper_layers}
         sol = net.solve(T)
@@ -615,30 +682,27 @@ def simulate(board, rows, settings=None, progress=print, elements=None):
                 break
     pulse = None
     if s.pulse:
-        # heat spreads ~sqrt(alpha_cu t) along copper during the pulse: a tighter, finer thermal domain
-        reach = min(s.thermal_margin, max(2.0, 3e3 * math.sqrt(1.1e-4 * s.pulse_ms * 1e-3)))
-        tmp = ThermalModel(board, grid, thick, s, bbox=thermal_box(board, box, s, reach) if box else None)
+        tmp = f_pulse.result()
         base = (tm, sol) if (s.pulse_from_steady and tm is not None) else None
         pulse = run_pulse(net, tmp, thick, s, base, progress)
         pulse["tgrid"] = tmp.tg
     coarse = None
     if s.error_estimate:
-        progress("Error estimate: re-solving at 2x pitch...")
-        g2 = rz.Grid(grid.x0, grid.y0, grid.h * 2, -(-grid.nx // 2), -(-grid.ny // 2))
-        try:
-            n2 = Network(board, rz.rasterise(board, nets, g2), rows, s, thick, els)
-            coarse = n2.solve(None)
-        except SimError as e:
-            progress(f"  coarse solve failed ({e}); skipping error estimate")
+        progress("Error estimate (solved at 2x pitch alongside)...")
+        coarse, err = f_coarse.result()
+        if err:
+            progress(f"  coarse solve failed ({err}); skipping error estimate")
     mag = None
     if s.magnetic:
         from . import magnetic as MG
         progress("Magnetic field and loop inductance...")
         mg = MG.MomentGrid(grid)
         zL, zb = MG.layer_z(board, thick)
+        f_b = pool.submit(MG.b_planes, sol, net, mg, thick, zL, zb, s.b_height)      # alongside the L solve
         units = net.solve_unit_rows(sol.T)
         Lmat, closure = MG.inductance_matrix(net, units, mg, thick, zL)
-        mag = dict(grid=mg.g, B=MG.b_planes(sol, net, mg, thick, zL, zb, s.b_height), L=Lmat, closure=closure)
+        mag = dict(grid=mg.g, B=f_b.result(), L=Lmat, closure=closure)
+    pool.shutdown(wait=False)
     res = build_result(board, R, net, sol, cold, coarse, tm, rows, s, thick,
                        dict(iterations=iters, converged=converged, runaway=runaway,
                             seconds=time.time() - t0, pulse=pulse), mag)

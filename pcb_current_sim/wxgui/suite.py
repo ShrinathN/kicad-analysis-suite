@@ -51,6 +51,11 @@ def open_window(session, key, parent=None):
     elif key == "matching":
         from .matching import MatchingFrame
         w = MatchingFrame(session)
+    elif key == "extract":
+        if session.board is None:
+            return wx.MessageBox("Load a board first.", "Trace R/L/C", parent=parent)
+        from .extract import ExtractFrame
+        w = ExtractFrame(session)
     elif key == "stackup":
         if session.stackup is None:
             return wx.MessageBox("Load a board first.", "Stackup", parent=parent)
