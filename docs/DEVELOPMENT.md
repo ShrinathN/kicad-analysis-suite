@@ -37,7 +37,7 @@ VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.s
 python3 -m pytest tests
 ```
 
-About 82 tests in about 15 s:
+About 84 tests in about 15 s:
 - `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results.
 - `tests/test_suite.py`: stackup parsing and the εr(f) model, scenario migration, the session, the component library and external tool detection.
 - `tests/test_linsolve.py`: the solver backends, copper coverage as a union, the setup cache and the thermal cell.
@@ -56,6 +56,7 @@ These open real windows, so run them inside the Flatpak with the plugin venv, an
 | `sim/demo/smoke_extract.py` | Opens Trace R/L/C on the demo board, extracts a trace, shows every tab | `sim/demo/smoke_out/` |
 | `sim/demo/smoke_matching.py` | Builds a network in the matching editor, edits properties, runs every analysis | `sim/demo/smoke_out/` |
 | `sim/demo/screenshots.py` | Regenerates the documentation screenshots | `docs/screenshots/` |
+| `sim/demo/screenshots_extract.py BOARD` | Trace R/L/C screenshots from a board's saved `extract` setup (the docs use the goodtorch boost converter, which is not in the repository) | `docs/screenshots/extract_*.png` |
 
 ```sh
 flatpak run --command=sh org.kicad.KiCad -c "$VENV sim/demo/screenshots.py"

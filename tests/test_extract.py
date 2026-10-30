@@ -231,6 +231,20 @@ def test_zone_between_pads_over_plane():
     assert "zone SIG F.Cu" in SP.write(e)
 
 
+
+def test_pad_in_pour_is_copper_not_a_short_and_no_double_c():
+    """A big pad sitting in the pour (not a port) is plain copper: R still matches the DC solver,
+    which sees the pad as copper too; and its own C is not added on top of the pour's."""
+    b = make_board(zone("SIG", "F.Cu", 0, -2, 20, 2) + smd("J1", (0.5, 0), "SIG", size=(1, 4))
+                   + smd("J2", (19.5, 0), "SIG", size=(1, 4)) + smd("U1", (10, 0), "SIG", size=(6, 3.6))
+                   + zone("GND", "B.Cu", -5, -10, 65, 10))
+    e = extract(b, ["J1.1", "J2.1"], dc_solver=False)
+    assert e.zones[0]["terminals"] == 3
+    r_true = X.dc_resistance(b, "J1.1", "J2.1", ST.from_board(b), X.Options())
+    assert e.pairs[0]["R_mOhm"] == pytest.approx(r_true * 1e3, rel=0.03)
+    assert all(p["C_pF"] < 1e-3 and "inside the pour" in p["reference"] for p in e.pads)
+    assert e.summary["C_total_pF"] == pytest.approx(EPS0 * ER * 80e-6 / H * 1e12, rel=0.03)
+
 def test_zone_with_track_and_via_terminals():
     """A track feeds a pour; a via in the pour drops to a track on B.Cu: one path through the zone."""
     items = (seg((0, 0), (5, 0), 0.3, "SIG") + zone("SIG", "F.Cu", 5, -3, 15, 3) + via((14, 0), "SIG")
@@ -256,11 +270,36 @@ def test_elements_join_nets_and_reach_ref():
     assert e.pairs[0]["R_mOhm"] == pytest.approx((10 + r_tracks) * 1e3, rel=0.01)
     caps = [el for el in e.elements if el[0] == "C_C1"]
     assert caps and "REF" in caps[0][2:4] and caps[0][4] == pytest.approx(100e-9)
+    assert e.pairs[0]["C_el_pF"] == pytest.approx(100e3) and e.pairs[0]["C_pF"] < 100     # copper C kept apart
     assert any("DC calibration of R is skipped" in w for w in e.warnings)
     els[2].enabled, els[0].enabled = True, False                     # now an inductor instead of the resistor
     e2 = X.Extractor(b, st, ["GND"], X.Options(sample=2.0), elements=els).run(["J1.1", "J2.1"])
     assert e2.pairs[0]["L_nH"] == pytest.approx(1000 + e.pairs[0]["L_nH"], rel=0.01)
 
+
+
+def test_names_and_drawing_through_pour_and_element():
+    """SPICE names say where each element comes from (no R1, C2 that look like board parts); the
+    drawing shows a pour as one box with the pour's R and L, then the user's part by its name."""
+    items = (zone("A", "F.Cu", 0, -2, 20, 2) + smd("J1", (0.5, 0), "A", size=(1, 4))
+             + smd("TP1", (10, 1), "A", size=(1, 1)) + smd("L1", (19.5, 0), "A", size=(1, 4))
+             + seg((24, 0), (34, 0), 0.5, "B") + smd("L1B", (24, 0), "B") + smd("J2", (34, 0), "B")
+             + zone("GND", "B.Cu", -5, -10, 65, 10))
+    b = make_board(items)
+    els = [EL.Element("L1", "L1.1", "L1B.1", 0.0, model="L", L=2.2e-6)]
+    e = X.Extractor(b, ST.from_board(b), ["GND"], X.Options(sample=2.0), elements=els).run(["J1.1", "J2.1"])
+    names = [el[0] for el in e.elements]
+    assert len(set(n.upper() for n in names)) == len(names)
+    assert all(n.split("_")[0] in ("R", "L", "C", "RG", "D") for n in names), names
+    assert "L_L1" in names and "C_TP1_1" in names and "TP1_1" in e.nodes
+    assert any(n.startswith("R_pour1_") for n in names) and any(n.startswith("R_trk") for n in names)
+    pr = e.pairs[0]
+    assert pr["pours"] == 1 and not math.isfinite(pr["length_mm"])
+    cells = [c for c in X.main_path(e) if not c["shunt"]]
+    assert [c["kind"] for c in cells][:2] == ["pour", "L"] and cells[1]["name"] == "L1"
+    R, L = cells[0]["value"]
+    assert L == pytest.approx(MU0 * H * 18 / 4, rel=0.03)            # J1 to L1 across the pour
+    assert "through 1 pour(s)" in SP.write(e)
 
 @pytest.mark.skipif(not __import__("shutil").which("ngspice"), reason="ngspice not installed")
 def test_diode_element_in_ngspice(tmp_path):

@@ -38,6 +38,13 @@ Pick two or more pads on one net and the return nets. The tool follows the coppe
 - Resistors, diodes, capacitors and inductors between any two pads, also across nets (trace → part → trace), with return-net pads as the reference.
 - Outputs: per-path totals, a segment table with Z₀ and the return found, the path coloured by Z₀ with impedance steps marked, a drawn schematic of the ladder, and a `.subckt` of plain R, L and C that runs in any SPICE.
 
+The example below is a battery boost converter's input path: from the battery terminal H5 through the BAT_P pour, the inductor L1 (added as an element) and the switch-node pour to the FET Q3, over a BAT_N plane on a 2-layer board. Its input capacitors are elements to BAT_N.
+
+| | |
+|---|---|
+| ![Schematic tab](docs/screenshots/extract_schematic.png) | ![Board tab](docs/screenshots/extract_board.png) |
+| ![Summary tab](docs/screenshots/extract_summary.png) | ![SPICE tab](docs/screenshots/extract_spice.png) |
+
 ## Matching & Tolerance
 
 Build a ladder network in a visual editor: the symbols appear as you add parts, and the plots follow every edit.

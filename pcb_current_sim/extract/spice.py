@@ -33,10 +33,21 @@ def write(ext, name=None, board_name=""):
     out.append(f"* Sections <= lambda/10 at {fmt(o.f_max)}Hz; R is DC"
                + (" (scaled to the DC field solution)" if "R_scale" in s else " (rho l / w t)")
                + "; L, C quasi-static (2D field solver per cross-section).")
+    out.append("* Names: Pn ports; L1_2 = node at pad L1.2; nN = internal node; R_/L_trkC_S = track chain C "
+               "section S;")
+    out.append("*   R_/L_viaN = via; R_/L_pourK_A_B = pour K between nodes A and B; C_node = capacitance to "
+               "REF; RG_node = dielectric loss;")
+    out.append("*   R_/C_/L_/D_ + a part name = an element you added.")
     for pr in ext.pairs:
-        out.append(f"* {pr['pair']}: length {pr['length_mm']:.2f} mm, R {pr['R_mOhm']:.3g} mOhm, "
-                   f"L {pr['L_nH']:.3g} nH, C {pr['C_pF']:.3g} pF, Z0 {pr['Z0_avg']:.1f} Ohm, "
-                   f"delay {pr['delay_ps']:.1f} ps")
+        line = f"* {pr['pair']}: R {pr['R_mOhm']:.3g} mOhm, L {pr['L_nH']:.3g} nH, copper C {pr['C_pF']:.3g} pF"
+        if pr.get("C_el_pF"):
+            line += f" (+ {fmt(pr['C_el_pF'] * 1e-12)}F of elements)"
+        if pr.get("pours"):
+            line += f", through {pr['pours']} pour(s)"
+        else:
+            line += (f", length {pr['length_mm']:.2f} mm, Z0 {pr['Z0_avg']:.1f} Ohm, "
+                     f"delay {pr['delay_ps']:.1f} ps")
+        out.append(line)
     out.append(f".subckt {name} {' '.join(ports)} REF")
     last = None
     diodes = False

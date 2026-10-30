@@ -15,9 +15,11 @@
    λ/10 at f_max (and `max_section`).  Each section is R + L in series with C/2 to the
    reference at each end (a π ladder); optional G = ωC tanδ at f_max.
 """
+import heapq
 import math
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -34,6 +36,8 @@ MU0 = 4e-7 * math.pi
 C_LIGHT = 299792458.0
 EPS0 = 8.8541878128e-12
 ZONE_CELLS = 60_000          # mesh cells per zone (pitch >= 0.05 mm)
+TAP_R = 0.25               # mm, radius of the tap on a pour under a pad that is not a port or element pin
+PAIR_TOL = 1e-6           # zone branches weaker than this (relative conductance) are dropped
 GND_WORDS = ("GND", "VSS", "0V", "EARTH", "RETURN", "AGND", "DGND", "PGND", "SGND")
 
 
@@ -386,7 +390,12 @@ class Extractor:
         G = ap * st.t[L0] / self.rho()
         Gam = ap / ((Lsq[I] + Lsq[J]) / 2)
 
-        # terminals: the cells under each touching pad / via / track end (each cell claimed once)
+        # terminals: the cells under each touching pad / via / track end (each cell claimed once).
+        # A port or element pad is one node over its whole area (as the DC solver ties it to its
+        # electrode); any other pad is plain copper of the pour, tapped near its centre: merging
+        # its cells would let current cut across it for free (big THT pads in a pour read R low).
+        g = self._graph
+        fed = set(g.ports) | {v for e in g.edges if e.kind == "element" for v in (e.a, e.b)}
         owner = np.full(n, -1, np.int64)
         order = sorted(range(len(terms)), key=lambda t: {"pad": 0, "via": 1, "end": 2}[terms[t][1][0]])
         for t in order:
@@ -395,6 +404,8 @@ class Extractor:
             if kind == "pad":
                 m = what.geom.inside(xs, ys)
                 pos = what.pos
+                if nd not in fed:
+                    m &= np.hypot(xs - pos[0], ys - pos[1]) <= max(TAP_R, h / 2)
             else:
                 pos = None
             if pos is None:
@@ -444,7 +455,7 @@ class Extractor:
         for i in range(T):
             for j in range(i + 1, T):
                 gij, mij = -Gred[i, j], -Mred[i, j]
-                if gij > 1e-6 * gmax and mij > 0:
+                if gij > PAIR_TOL * gmax and mij > 0:
                     pairs.append((i, j, 1 / gij, 1 / mij))
         # worst-case terminal-to-terminal R and L (for the table)
         R_eff = L_eff = 0.0
@@ -555,26 +566,39 @@ class Extractor:
         node_list = [names[n] for n in g.ports] + ["REF"]
         counter = [0]
 
+        taken = set(n.upper() for n in node_list)
+
         def nname(nd=None):
+            """Pad nodes are named after the pad (L1.2 -> L1_2), all others n1, n2, ..."""
             if nd is not None and g.nodes[nd].kind == "ref":
                 return "REF"
             if nd is not None and nd in names:
                 return names[nd]
-            counter[0] += 1
-            nm = f"n{counter[0]}"
+            nm = _ident(g.nodes[nd].label) if nd is not None and g.nodes[nd].kind == "pad" else ""
+            if not nm or nm.upper() in taken:
+                counter[0] += 1
+                nm = f"n{counter[0]}"
+            taken.add(nm.upper())
             node_list.append(nm)
             if nd is not None:
                 names[nd] = nm
             return nm
         elements, shunt_c, shunt_g = [], {}, {}
-        cnt = {"R": 0, "L": 0, "C": 0}
+        used = set()
 
-        def series(a, b, R, L, tag):
+        def ename(kind, base):
+            """SPICE instance names say where an element comes from (R_trk1_2, L_via5, C_L1_2, ...), so
+            they cannot be mistaken for the board's reference designators.  SPICE ignores case."""
+            nm, k = f"{kind}_{base}", 2
+            while nm.upper() in used:
+                nm, k = f"{kind}_{base}_{k}", k + 1
+            used.add(nm.upper())
+            return nm
+
+        def series(a, b, R, L, tag, base):
             mid = nname()
-            cnt["R"] += 1
-            elements.append([f"R{cnt['R']}", "R", a, mid, max(R, 1e-6), tag])
-            cnt["L"] += 1
-            elements.append([f"L{cnt['L']}", "L", mid, b, max(L, 1e-15), tag])
+            elements.append([ename("R", base), "R", a, mid, max(R, 1e-6), tag])
+            elements.append([ename("L", base), "L", mid, b, max(L, 1e-15), tag])
 
         segments, pieces, markers = [], [], []
         seg_of_edge = {}
@@ -638,7 +662,7 @@ class Extractor:
             for i in range(nsec):
                 nxt = nname(nb) if i == nsec - 1 else nname()
                 R, L, C, G = acc[i]
-                series(prev, nxt, R, L, f"chain {ci + 1}")
+                series(prev, nxt, R, L, f"chain {ci + 1}", f"trk{ci + 1}_{i + 1}")
                 for nd in (prev, nxt):
                     shunt_c[nd] = shunt_c.get(nd, 0.0) + C / 2
                     shunt_g[nd] = shunt_g.get(nd, 0.0) + G / 2
@@ -655,7 +679,7 @@ class Extractor:
                 continue
             m = self.via(e.via, *e.layers, e.length)
             a, b = nname(e.a), nname(e.b)
-            series(a, b, m["R"], m["L"], f"via #{e.via}")
+            series(a, b, m["R"], m["L"], f"via #{e.via}", f"via{e.via}")
             for nd in (a, b):
                 shunt_c[nd] = shunt_c.get(nd, 0.0) + m["C"] / 2
             vias.append(dict(chain="", kind="via", layer=f"{e.layers[0]}→{e.layers[1]}",
@@ -677,7 +701,7 @@ class Extractor:
             names_t = [nname(nd) for nd, _ in terms]
             tag = f"zone {self.board.zones[zi].net} {self.board.zones[zi].layer}"
             for i, j, R, L in m["pairs"]:
-                series(names_t[i], names_t[j], R, L, tag)
+                series(names_t[i], names_t[j], R, L, tag, f"pour{len(zones) + 1}_{names_t[i]}_{names_t[j]}")
             er, tand = st.near(self.board.zones[zi].layer)
             for nm, C in zip(names_t, m["C"]):
                 shunt_c[nm] = shunt_c.get(nm, 0.0) + C
@@ -696,16 +720,16 @@ class Extractor:
                 continue
             el = e.el
             a, b = nname(e.a), nname(e.b)
-            nm = "".join(c if c.isalnum() else "_" for c in el.name) or "X"
+            nm = _ident(el.name) or "X"
             tag = f"element {el.name}"
             if el.model == "V":
-                elements.append([f"D_{nm}", "D", a, b, (el.Vf, el.R), tag])
+                elements.append([ename("D", nm), "D", a, b, (el.Vf, el.R), tag])
             elif el.model == "C":
-                elements.append([f"C_{nm}", "C", a, b, el.C, tag])
+                elements.append([ename("C", nm), "C", a, b, el.C, tag])
             elif el.model == "L":
-                elements.append([f"L_{nm}", "L", a, b, max(el.L, 1e-15), tag])
+                elements.append([ename("L", nm), "L", a, b, max(el.L, 1e-15), tag])
             else:
-                elements.append([f"R_{nm}", "R", a, b, max(el.R, 1e-6), tag])
+                elements.append([ename("R", nm), "R", a, b, max(el.R, 1e-6), tag])
             user.append(dict(name=el.name, model={"R": "resistor", "V": "diode", "C": "capacitor",
                                                   "L": "inductor"}.get(el.model, el.model),
                              a=el.a, b=el.b, value=el.describe(), nodes=f"{a} – {b}"))
@@ -713,11 +737,16 @@ class Extractor:
         pads = []
         if o.pad_c:
             used_nodes = {e.a for e in g.edges} | {e.b for e in g.edges} | set(g.ports)
+            meshed = [self.board.zones[g.nodes[zn].zone] for zn in zl]
             for nd in used_nodes:
                 node = g.nodes[nd]
                 if node.kind != "pad":
                     continue
                 C, how = self.pad_c(node.pad)
+                f = _covered(node.pad, meshed) if not node.pad.plated else 0.0
+                if f > 0.01:            # that part of the pad is in a pour's mesh, C included there
+                    C *= 1 - f
+                    how += f"; {100 * f:.0f} % inside the pour (counted there)"
                 nm = nname(nd)
                 shunt_c[nm] = shunt_c.get(nm, 0.0) + C
                 pads.append(dict(pad=node.label, port=nm if nm.startswith("P") else "", C_pF=C * 1e12,
@@ -725,12 +754,10 @@ class Extractor:
 
         for nm in list(shunt_c):
             if shunt_c[nm] > 0:
-                cnt["C"] += 1
-                elements.append([f"C{cnt['C']}", "C", nm, "REF", shunt_c[nm], ""])
+                elements.append([ename("C", nm), "C", nm, "REF", shunt_c[nm], ""])
         for nm, G in shunt_g.items():
             if G > 0:
-                cnt["R"] += 1
-                elements.append([f"R{cnt['R']}", "R", nm, "REF", 1 / G, "dielectric loss"])
+                elements.append([ename("RG", nm), "R", nm, "REF", 1 / G, "dielectric loss"])
 
         ext = Extraction(g.net, list(port_ids), self.return_nets, o, segments, vias, pads, elements,
                          node_list, [], pieces, markers, warnings)
@@ -757,6 +784,10 @@ class Extractor:
                 warnings.append(f"DC field solution failed ({ex}); R is ρl/(wt) only.")
         ext.summary["R_dc_formula_mOhm"] = r_lad * 1e3
 
+        # shunt C to the return: the copper's, and the capacitors you added (kept apart in the tables)
+        to_ref = [el for el in elements if el[1] == "C" and "REF" in el[2:4]]
+        c_el = float(sum(el[4] for el in to_ref if el[5].startswith("element ")))
+        c_cu = float(sum(el[4] for el in to_ref)) - c_el
         # totals per port pair (port 1 to each other port)
         for i, nd in enumerate(g.ports[1:], start=2):
             ks = g.shortest(g.ports[0], nd) or []
@@ -780,19 +811,24 @@ class Extractor:
                     Ctot += m["C"]
                     delay += math.sqrt(m["L"] * m["C"]) if m["C"] else 0.0
                     vias_on += 1
+            # a path through a pour has no single length, Z0 or delay
+            pours = len({g.edges[kk].a for kk in ks if g.edges[kk].kind == "zonelink"})
+            if pours:
+                length = delay = Ltot = float("nan")
+                z0s = []
             # R and L of the whole network between the ports (zones, elements, parallel paths);
             # C: everything to the return
             ext.pairs.append(dict(pair=f"P1 → P{i}", a=port_ids[0], b=port_ids[i - 1], length_mm=length,
-                                  vias=vias_on, R_mOhm=two_port(ext, "P1", f"P{i}", "R") * 1e3,
+                                  vias=vias_on, pours=pours, R_mOhm=two_port(ext, "P1", f"P{i}", "R") * 1e3,
                                   L_nH=two_port(ext, "P1", f"P{i}", "L") * 1e9,
-                                  C_pF=float(sum(el[4] for el in elements if el[1] == "C" and "REF" in el[2:4])) * 1e12,
+                                  C_pF=c_cu * 1e12, C_el_pF=c_el * 1e12,
                                   delay_ps=delay * 1e12,
                                   Z0_min=min(z0s) if z0s else float("nan"),
                                   Z0_max=max(z0s) if z0s else float("nan"),
                                   Z0_avg=math.sqrt(Ltot / Ctot) if Ctot else float("nan")))
         ext.summary.update(
             net=g.net, ports=", ".join(port_ids), return_nets=", ".join(self.return_nets) or "(none)",
-            C_total_pF=float(sum(el[4] for el in elements if el[1] == "C" and "REF" in el[2:4])) * 1e12,
+            C_total_pF=c_cu * 1e12, C_elements_pF=c_el * 1e12,
             sections=sum(1 for el in elements if el[1] == "L"), field_solves=self.n_solves,
             f_max_Hz=o.f_max, seconds=time.time() - t0)
         if any(s["reference"] == "none in window" for s in segments):
@@ -828,6 +864,29 @@ def _merge(a, b):
     if lb > a["_ref_len"]:
         a["reference"], a["_ref_len"] = b["reference"], lb
     a["x1"], a["y1"] = b["x1"], b["y1"]
+
+
+def _covered(pad, zones, n=16):
+    """Fraction of an SMD pad's area inside any of the zones on its layer (sampled n x n)."""
+    zs = [z for z in zones if z.layer == pad.layers[0]]
+    if not zs:
+        return 0.0
+    r = math.hypot(*pad.size) / 2
+    u = np.linspace(-r, r, n)
+    X, Y = np.meshgrid(pad.pos[0] + u, pad.pos[1] + u)
+    X, Y = X.ravel(), Y.ravel()
+    m = np.asarray(pad.geom.inside(X, Y), bool)
+    if not m.any():
+        return 0.0
+    hit = np.zeros(m.sum(), bool)
+    for z in zs:
+        hit |= np.asarray(z.geom.inside(X[m], Y[m]), bool)
+    return float(hit.mean())
+
+
+def _ident(text):
+    """A SPICE-safe identifier from a pad or part name (L1.2 -> L1_2)."""
+    return "".join(c if c.isalnum() else "_" for c in text)
 
 
 def two_port(ext, a, b, what="R"):
@@ -886,8 +945,10 @@ def dc_resistance(board, a, b, stackup, o):
 
 
 def main_path(ext, a="P1", b="P2"):
-    """Ladder cells along the series path a -> b, for drawing: dicts with kind (R, L, C, branch),
-    shunt flag, name and value.  Shunt elements to REF follow the node they hang from;
+    """Cells along the series path a -> b, for drawing: dicts with kind (R, L, C, D, pour, branch),
+    shunt flag, name and value.  The path is the one of least resistance.  A pour's branches are
+    drawn as one "pour" cell whose value is (R, L) between the terminals where the path enters and
+    leaves it.  Shunt elements to REF follow the node they hang from (dielectric loss is left out);
     series elements leaving the path (stubs) appear as one shunt 'branch' cell per node."""
     adj = {}
     for el in ext.elements:
@@ -896,15 +957,21 @@ def main_path(ext, a="P1", b="P2"):
             continue
         adj.setdefault(p, []).append((q, el))
         adj.setdefault(q, []).append((p, el))
-    prev, todo = {a: None}, [a]
-    while todo:
-        u = todo.pop(0)
+
+    def weight(el):
+        return 1e-12 + (el[4] if el[1] == "R" else el[4][1] if el[1] == "D" else 0.0)
+    dist, prev, heap = {a: 0.0}, {a: None}, [(0.0, a)]
+    while heap:
+        du, u = heapq.heappop(heap)
         if u == b:
             break
+        if du > dist[u]:
+            continue
         for v, el in adj.get(u, []):
-            if v not in prev:
-                prev[v] = (u, el)
-                todo.append(v)
+            dv = du + weight(el)
+            if dv < dist.get(v, math.inf):
+                dist[v], prev[v] = dv, (u, el)
+                heapq.heappush(heap, (dv, v))
     if b not in prev:
         return []
     nodes, series = [b], []
@@ -914,21 +981,38 @@ def main_path(ext, a="P1", b="P2"):
         nodes.append(u)
     nodes, series = nodes[::-1], series[::-1]
     on_path = {id(el) for el in series}
+    pour_tags = {el[5] for el in series if el[5].startswith("zone ")}
     shunts = {}
     for el in ext.elements:
         nm, kind, p, q, v, tag = el
-        if "REF" in (p, q):
+        if "REF" in (p, q) and tag != "dielectric loss":
             nd = q if p == "REF" else p
             shunts.setdefault(nd, []).append(dict(kind=kind, shunt=True, name=nm, value=v, node=nd))
     cells = []
 
     def node_cells(nd):
         cells.extend(shunts.get(nd, []))
-        off = [el for _, el in adj.get(nd, []) if id(el) not in on_path]
+        off = [el for _, el in adj.get(nd, []) if id(el) not in on_path and el[5] not in pour_tags]
         if off:
             cells.append(dict(kind="branch", shunt=True, name=f"stub at {nd}", value=len(off), node=nd))
     node_cells(nodes[0])
-    for el, nd in zip(series, nodes[1:]):
-        cells.append(dict(kind=el[1], shunt=False, name=el[0], value=el[4], node=nd))
-        node_cells(nd)
+    k = 0
+    while k < len(series):
+        el = series[k]
+        if el[5] in pour_tags:
+            j = k
+            while j + 1 < len(series) and series[j + 1][5] == el[5]:
+                j += 1
+            sub = SimpleNamespace(nodes=ext.nodes, elements=[e for e in ext.elements if e[5] == el[5]])
+            u, v = nodes[k], nodes[j + 1]
+            _, net, layer = el[5].split(" ", 2)
+            cells.append(dict(kind="pour", shunt=False, name=f"{net} pour", layer=layer, node=v,
+                              value=(two_port(sub, u, v, "R"), two_port(sub, u, v, "L"))))
+            node_cells(v)
+            k = j + 1
+            continue
+        name = el[5][len("element "):] if el[5].startswith("element ") else el[0]
+        cells.append(dict(kind=el[1], shunt=False, name=name, value=el[4], node=nodes[k + 1]))
+        node_cells(nodes[k + 1])
+        k += 1
     return cells

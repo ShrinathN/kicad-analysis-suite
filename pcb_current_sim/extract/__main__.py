@@ -42,9 +42,12 @@ def main(argv=None):
     log = sys.stderr if not a.output else sys.stdout
     print(f"net {e.net}, return {', '.join(ret) or '(none)'}", file=log)
     for pr in e.pairs:
-        print(f"{pr['pair']} ({pr['a']} → {pr['b']}): {pr['length_mm']:.2f} mm, {pr['vias']} via(s), "
-              f"R {pr['R_mOhm']:.3f} mΩ, L {pr['L_nH']:.3f} nH, C {pr['C_pF']:.3f} pF, "
-              f"Z0 {pr['Z0_avg']:.1f} Ω ({pr['Z0_min']:.0f}–{pr['Z0_max']:.0f}), delay {pr['delay_ps']:.1f} ps",
+        where = (f"through {pr['pours']} pour(s)" if pr.get("pours") else
+                 f"{pr['length_mm']:.2f} mm, Z0 {pr['Z0_avg']:.1f} Ω ({pr['Z0_min']:.0f}–{pr['Z0_max']:.0f}), "
+                 f"delay {pr['delay_ps']:.1f} ps")
+        print(f"{pr['pair']} ({pr['a']} → {pr['b']}): {pr['vias']} via(s), R {pr['R_mOhm']:.3f} mΩ, "
+              f"L {pr['L_nH']:.3f} nH, copper C {pr['C_pF']:.3f} pF"
+              + (f" (+ {pr['C_el_pF'] * 1e-12:.4g} F of elements)" if pr.get("C_el_pF") else "") + f", {where}",
               file=log)
     for r in e.segments:
         print(f"  #{r['chain']} {r['layer']} w {r['width_mm']:g} l {r['length_mm']:.2f} mm: Z0 {r['Z0']:.1f} Ω, "

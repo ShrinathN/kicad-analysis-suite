@@ -38,14 +38,16 @@ SEG_COLS = (("#", "chain", 40, "{}"), ("Layer", "layer", 60, "{}"), ("w [mm]", "
             ("L' [nH/mm]", "L_nH_mm", 100, "{:.3f}"), ("C' [pF/mm]", "C_pF_mm", 100, "{:.4f}"),
             ("R' [mΩ/mm]", "R_mOhm_mm", 100, "{:.3f}"), ("R'(f) [mΩ/mm]", "R_ac_mOhm_mm", 120, "{:.3f}"),
             ("delay [ps]", "delay_ps", 90, "{:.1f}"), ("Return", "reference", 220, "{}"))
-PAIR_COLS = (("Path", "pair", 80, "{}"), ("Pads", None, 140, "{}"), ("l [mm]", "length_mm", 75, "{:.2f}"),
-             ("Vias", "vias", 50, "{}"), ("R [mΩ]", "R_mOhm", 85, "{:.3f}"), ("L [nH]", "L_nH", 85, "{:.3f}"),
-             ("C [pF]", "C_pF", 85, "{:.3f}"), ("Z0 avg [Ω]", "Z0_avg", 95, "{:.1f}"),
+PAIR_COLS = (("Path", "pair", 85, "{}"), ("Pads", None, 150, "{}"), ("l [mm]", "length_mm", 65, "{:.2f}"),
+             ("Vias", "vias", 45, "{}"), ("R [mΩ]", "R_mOhm", 75, "{:.3f}"), ("L [nH]", "L_nH", 85, "{:.4g}"),
+             ("C cu [pF]", "C_pF", 85, "{:.3f}"), ("C elem.", "C_el_pF", 75, "pF"), ("Z0 avg [Ω]", "Z0_avg", 90, "{:.1f}"),
              ("Z0 min–max", None, 110, "{}"), ("Delay [ps]", "delay_ps", 95, "{:.1f}"))
 UNITS = {"R": "Ω", "L": "H", "C": "F"}
 
 
 def cell_label(kind, v):
+    if kind == "pour":
+        return f"{fmt_si(v[0], 'Ω')}, {fmt_si(v[1], 'H')}"
     if kind == "D":
         return f"{v[0]:g} V" + (f" + {fmt_si(v[1], 'Ω')}" if v[1] else "")
     return fmt_si(v, UNITS[kind])
@@ -124,7 +126,7 @@ class LadderCanvas(wx.ScrolledWindow):
 
     def show(self, cells, note=""):
         self.cells, self.note = cells, note
-        self.SetVirtualSize((80 + (len(cells) + 1) * self.CW + 80, self.H + 40))
+        self.SetVirtualSize((80 + (len(cells) + 1) * self.CW + 80, self.H + 30 + 14 * note.count("\n")))
         self.Refresh()
 
     def _paint(self, e):
@@ -138,7 +140,8 @@ class LadderCanvas(wx.ScrolledWindow):
         gc.SetBrush(wx.TRANSPARENT_BRUSH)
         small, bold = wx.Font(wx.FontInfo(8)), wx.Font(wx.FontInfo(9).Bold())
         gc.SetFont(small, c["dim"])
-        gc.DrawText(self.note, 10, self.H)
+        for i, line in enumerate(self.note.split("\n")):
+            gc.DrawText(line, 10, self.H + 14 * i)
         if not self.cells:
             return
         CW, Y0, Y1 = self.CW, self.Y0, self.Y1
@@ -149,14 +152,16 @@ class LadderCanvas(wx.ScrolledWindow):
         for cell in self.cells:
             k, v = cell["kind"], cell["value"]
             if not cell["shunt"]:
-                draw_symbol(gc, k, x, Y0, x + CW, Y0)
-                lab, ax = cell_label(k, v), x + CW / 2
+                draw_symbol(gc, "S2P" if k == "pour" else k, x, Y0, x + CW, Y0)
+                ax = x + CW / 2
                 gc.SetFont(bold, c["fg"])
                 w = gc.GetFullTextExtent(cell["name"])[0]
                 gc.DrawText(cell["name"], ax - w / 2, Y0 - 36)
                 gc.SetFont(small, c["fg"])
-                w = gc.GetFullTextExtent(lab)[0]
-                gc.DrawText(lab, ax - w / 2, Y0 + 18)
+                labs = [cell["layer"], *cell_label(k, v).split(", ")] if k == "pour" else [cell_label(k, v)]
+                for i, lab in enumerate(labs):
+                    w = gc.GetFullTextExtent(lab)[0]
+                    gc.DrawText(lab, ax - w / 2, Y0 + 24 + 13 * i)
             else:
                 ax = x + 24
                 p = gc.CreatePath()
@@ -601,6 +606,8 @@ class ExtractFrame(wx.Frame):
             for title, key, _, fmt in PAIR_COLS:
                 if title == "Pads":
                     row.append(f"{pr['a']} → {pr['b']}")
+                elif title == "C elem.":
+                    row.append(fmt_si(pr.get("C_el_pF", 0) * 1e-12, "F") if pr.get("C_el_pF") else "–")
                 elif title == "Z0 min–max":
                     row.append(f"{_cell('{:.0f}', pr['Z0_min'])}–{_cell('{:.0f}', pr['Z0_max'])}")
                 else:
@@ -609,17 +616,23 @@ class ExtractFrame(wx.Frame):
         s, o = e.summary, e.opts
         lines = [f"Net {e.net}; ports " + ", ".join(f"P{k + 1} = {p}" for k, p in enumerate(e.ports)),
                  f"Return nets: {s['return_nets']}",
-                 f"Total shunt C (with stubs, pads, vias): {s['C_total_pF']:.3f} pF",
+                 f"Copper C to the return (with stubs, pads, vias): {s['C_total_pF']:.3f} pF"
+                 + (f"; capacitors you added: {fmt_si(s['C_elements_pF'] * 1e-12, 'F')}" if s.get("C_elements_pF") else ""),
                  f"Ladder: {s['sections']} RL section(s), each ≤ λ/10 at {fmt_si(o.f_max, 'Hz')}"
                  + (f" and ≤ {o.max_section:g} mm" if o.max_section > 0 else ""),
-                 f"R from ρl/(wt): {s['R_dc_formula_mOhm']:.3f} mΩ (P1→P2)"]
+                 f"R from ρl/(wt) for tracks" + (" and the mesh for pours" if e.zones else "")
+                 + f": {s['R_dc_formula_mOhm']:.3f} mΩ (P1→P2)"]
         if "R_dc_field_mOhm" in s:
             lines.append(f"R from the DC field solution: {s['R_dc_field_mOhm']:.3f} mΩ (pads, crowding, vias "
                          f"included); ladder R scaled × {s['R_scale']:.3f}")
         lines.append(f"Copper at {o.T:g} °C. R in the ladder is DC; the table's R'(f) is the skin-effect value "
                      f"at {fmt_si(o.f_max, 'Hz')} (current on the face towards the return).")
         if e.pads:
-            lines.append("Pad C: " + ", ".join(f"{p['pad']} {p['C_pF']:.3f} pF" for p in e.pads))
+            inside = [p["pad"] for p in e.pads if "inside the pour" in p["reference"] and p["C_pF"] < 1e-3]
+            lines.append("Pad C: " + ", ".join(f"{p['pad']} {p['C_pF']:.3f} pF" for p in e.pads
+                                               if p["pad"] not in inside))
+            if inside:
+                lines.append("Pads inside a pour (their C is the pour's): " + ", ".join(sorted(inside, key=EL.natural_key)))
         if e.warnings:
             lines += ["", "Warnings:"] + ["• " + w for w in e.warnings]
         self.info.SetValue("\n".join(lines))
@@ -644,9 +657,14 @@ class ExtractFrame(wx.Frame):
         self.spice.SetValue(SP.write(e, board_name=os.path.basename(self.session.board_path or "")))
         self._plot()
         cells = X.main_path(e, "P1", "P2")
-        self.ladder.show(cells, f"P1 = {e.ports[0]} → P2 = {e.ports[1]}; values as in the SPICE subcircuit"
-                         + ("; other ports and stubs appear as branch boxes" if len(e.ports) > 2 or
-                            any(c["kind"] == "branch" for c in cells) else ""))
+        note = [f"P1 = {e.ports[0]} → P2 = {e.ports[1]}, along the path of least resistance; values as in the "
+                "SPICE subcircuit (dielectric loss not drawn)."]
+        if any(c["kind"] == "pour" for c in cells):
+            note.append("A pour is one box: its R and L between the pads where the path enters and leaves it. "
+                        "The subcircuit has a branch for every pair of pads on the pour.")
+        if len(e.ports) > 2 or any(c["kind"] == "branch" for c in cells):
+            note.append("Other ports and stubs appear as branch boxes.")
+        self.ladder.show(cells, "\n".join(note))
 
     def _plot(self):
         e, b = self.ext, self.board
