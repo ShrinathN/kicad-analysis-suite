@@ -16,8 +16,12 @@ It also builds per-pad, per-via and per-track tables, with IPC-2221 and Onderdon
 ## Use
 
 **From KiCad 10 (IPC API plugin, native or Flatpak)**
-1. Run `kicad_plugin/install.sh`. Use `--link` to symlink instead of copy.
-   It finds the Flatpak's plugin folder (`~/.var/app/org.kicad.KiCad/data/kicad/10.0/plugins`) or the native one (`~/.local/share/kicad/10.0/plugins`).
+1. Install the plugin in one of two ways (not both: the two copies would have the same identifier):
+   - **Zip package (Plugin and Content Manager).** Run `python3 kicad_plugin/build_pcm.py`; it writes `dist/kicad-analysis-suite-<version>.zip` (`-o DIR` for another folder, `--version X.Y.Z` to override the version).
+     In KiCad open *Plugin and Content Manager → Install from File…*, pick the zip and apply. KiCad unpacks it to `3rdparty/plugins/io_github_shrinathn_kicad-analysis-suite/` and can uninstall or update it from the same dialog.
+     The package metadata (name, version, licence, minimum KiCad version, `runtime: ipc`) is in `kicad_plugin/metadata.json`; raise its version for each release.
+   - **Script.** Run `kicad_plugin/install.sh` (`--link` to symlink instead of copy).
+     It finds the Flatpak's plugin folder (`~/.var/app/org.kicad.KiCad/data/kicad/10.0/plugins`) or the native one (`~/.local/share/kicad/10.0/plugins`).
 2. In KiCad, open *Preferences → Plugins* and tick **Enable KiCad API**. Then restart the PCB editor.
 3. On first load, KiCad creates the plugin's Python venv from `requirements.txt` (kicad-python, numpy, scipy, matplotlib, plotly).
    This needs network access, and the toolbar button appears once it finishes.
@@ -282,5 +286,5 @@ Each tool rewrites only its own section. Version-1 files load as the `dc` sectio
 It also holds `kicad_link` (the kipy wrapper), `tables` (helpers shared by both GUIs), `wxgui/` (the wx app and viewer, used inside KiCad) and `gui/` (the Tk app and viewer).
 `pcb_current_sim/matching/` holds the matching tool's core: `model` (elements, ports, bands, ABCD cascade), `analysis` (corners, Monte Carlo, worst case, sensitivity, BOM), `touchstone`, `microstrip` and `plots`. `wxgui/matching.py` is its window and `wxgui/schematic.py` the symbol canvas.
 `pcb_current_sim/suite/` holds the toolkit-neutral suite core: `session` (shared state and change events), `stackup`, `library`, `tools` (the tool registry), `external` (solver detection) and `results_index`. `wxgui/suite.py` holds Home, the Suite menu and the shared panels.
-`kicad_plugin/` holds the KiCad plugin files: `plugin.json` (two actions), `_bootstrap.py`, `home.py`, `action.py`, icons and `install.sh`.
+`kicad_plugin/` holds the KiCad plugin files: `plugin.json` (two actions), `_bootstrap.py`, `home.py`, `action.py`, icons, `install.sh`, and the PCM package files `metadata.json` and `build_pcm.py`.
 `sim/demo/` holds the demo board and four wx smoke tests: `smoke.py` (main window and viewer), `smoke3d.py` (3D tab), `smoke_suite.py` (Home, the shared panels and the DC window) and `smoke_matching.py` (builds a network in the editor, runs every analysis and screenshots every tab). The last two work on a copy in `smoke_out/`, and `smoke_suite.py` clears that folder first. Run them with the plugin venv's python inside the Flatpak; they write screenshots next to themselves.

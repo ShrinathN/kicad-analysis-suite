@@ -1,0 +1,33 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v1",
+  "name": "PCB Analysis Suite",
+  "description": "DC current density, IR drop, electro-thermal, trace R/L/C to SPICE, switching-loop and matching analysis.",
+  "description_full": "A PCB analysis suite for KiCad's PCB editor (IPC API plugin).\n\nTools:\n- DC & Thermal: current density, IR drop, resistance elements, electro-thermal and pulse heating, DC B-field maps, 3D and ParaView export.\n- Trace R/L/C to SPICE: extracts the R, L and C of any trace, pour or path between pads and writes a plain RLC SPICE subcircuit.\n- Switching Loop: PEEC extraction of hard-switched power stages (loop and gate inductance, ringing) and the switching transient.\n- Matching & Tolerance: ladder matching networks with real component models, Monte Carlo, corners and worst case.\n\nRequires KiCad 10 with the API enabled (Preferences > Plugins > Enable KiCad API). On first load KiCad installs the Python dependencies (numpy, scipy, matplotlib, plotly, kicad-python), which needs network access.",
+  "identifier": "io.github.shrinathn.kicad-analysis-suite",
+  "type": "plugin",
+  "author": {
+    "name": "Shrinath N",
+    "contact": {
+      "github": "https://github.com/ShrinathN"
+    }
+  },
+  "license": "GPL-3.0",
+  "resources": {
+    "homepage": "https://github.com/ShrinathN/kicad-analysis-suite"
+  },
+  "tags": [
+    "simulation",
+    "current-density",
+    "thermal",
+    "spice",
+    "power-integrity"
+  ],
+  "versions": [
+    {
+      "version": "0.1.0",
+      "status": "testing",
+      "kicad_version": "10.0",
+      "runtime": "ipc"
+    }
+  ]
+}

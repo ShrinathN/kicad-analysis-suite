@@ -91,7 +91,8 @@ The screenshot example matches a small 2.4 GHz antenna (20 Ω + 1.5 nH + 3 pF) t
 ## Install
 
 1. Install KiCad 10 and enable the API: *Preferences → Plugins → Enable KiCad API*.
-2. Run `kicad_plugin/install.sh`. It finds the plugin folder of a native or Flatpak KiCad.
+2. Either install the zip package: run `python3 kicad_plugin/build_pcm.py` (writes `dist/kicad-analysis-suite-<version>.zip`), then in KiCad open *Plugin and Content Manager → Install from File…* and pick the zip.
+   Or run `kicad_plugin/install.sh`, which copies the plugin into the plugin folder of a native or Flatpak KiCad. Use one method, not both.
 3. Restart the PCB editor. On first load KiCad installs the Python dependencies (numpy, scipy, matplotlib, plotly, kicad-python), which needs network access.
 4. Two toolbar buttons appear: **PCB Analysis Suite** opens the Home window, and **DC & Thermal** opens that tool directly.
 

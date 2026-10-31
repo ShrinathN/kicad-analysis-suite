@@ -14,6 +14,9 @@ fp-info-cache
 \#auto_saved_files\#
 _autosave-*
 
+# Built PCM packages
+dist/
+
 # Generated simulation output
 results/
 *.npz

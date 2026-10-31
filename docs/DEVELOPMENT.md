@@ -17,6 +17,10 @@ The running design log, kept up to date during development, is [CLAUDE.md](../CL
     `~/.var/app/org.kicad.KiCad/config/kicad/10.0/kicad_common.json`.
 - **Installing the plugin**: `kicad_plugin/install.sh` copies the plugin into KiCad's plugin folder, so re-run it after code changes.
   `install.sh --link` symlinks instead, for development.
+- **Zip package**: `python3 kicad_plugin/build_pcm.py` builds `dist/kicad-analysis-suite-<version>.zip` for *Plugin and Content Manager → Install from File…*.
+  It contains `metadata.json` (from `kicad_plugin/metadata.json`, PCM schema v1, `runtime: ipc`), `plugins/` (the files `install.sh` copies plus `pcb_current_sim/`, without caches) and a 64 × 64 `resources/icon.png` drawn by the script.
+  The build stops if the identifiers in `metadata.json` and `plugin.json` differ. Bump `versions[0].version` for each release.
+  Remove an `install.sh` copy before installing the zip (and the reverse): both would register the same identifier.
 
 **If the toolbar buttons don't appear:**
 - The plugin must be in `~/.var/app/org.kicad.KiCad/data/kicad/10.0/plugins/` (where `install.sh` puts it), not in `scripting/plugins/`, which is only for the old SWIG plugins.
@@ -114,7 +118,7 @@ pcb_current_sim/
     layout.py               scrolled() input panels and refit() after their texts change
   gui/                      Tk GUI (DC & Thermal only, for hosts without wx)
   tables.py                 helpers shared by both GUIs
-kicad_plugin/               plugin.json (two toolbar actions), entry points, icons, install.sh
+kicad_plugin/               plugin.json (two toolbar actions), entry points, icons, install.sh, metadata.json + build_pcm.py (PCM zip)
 sim/demo/                   demo board, smoke tests, screenshot script
 tests/                      pytest suite
 docs/                       user guide, development notes, roadmap, screenshots
