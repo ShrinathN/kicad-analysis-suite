@@ -25,8 +25,9 @@ from ..matching import microstrip as MS  # noqa: E402
 from ..matching import model as M  # noqa: E402
 from ..matching import plots as PL  # noqa: E402
 from ..suite.library import C_TOL_CODES, DIELECTRICS, fmt_like, fmt_si, parse_si  # noqa: E402
+from .layout import refit, scrolled  # noqa: E402
 from .schematic import SchematicCanvas, make_icon  # noqa: E402
-from .suite import PART_FIELDS, PartDialog, attach_suite_menu  # noqa: E402
+from .suite import PART_FIELDS, PART_TIPS, PartDialog, attach_suite_menu  # noqa: E402
 
 PALETTE = (("Series", False, ("L", "C", "R", "TL", "S2P")),
            ("Shunt", True, ("L", "C", "R", "stub_open", "stub_short")))
@@ -34,6 +35,38 @@ PORT_KINDS = (("Z", "R + jX"), ("series RLC", "Series RLC"), ("parallel RLC", "P
               ("s1p", "Touchstone .s1p"))
 BAND_COLS = (("Name", "name", str), ("f1", "f1", "si"), ("f2", "f2", "si"), ("RL min [dB]", "rl_min", float),
              ("IL max [dB]", "il_max", float), ("VSWR max", "vswr_max", float))
+
+
+# hover help for the property grid rows (by property name; p_<attr> rows use PART_TIPS)
+PG_TIPS = {
+    "port_kind": "How the port impedance is described: a constant R + jX, an R-L-C in series or in parallel, "
+                 "or a measured one-port file",
+    "port_r": "Resistance of the port (e.g. 50 Ω for a source, an antenna's radiation resistance)",
+    "port_x": "Reactance of the port at every frequency (constant)",
+    "port_l": "Inductance in the port's RLC model (0 = none)",
+    "port_c": "Capacitance in the port's RLC model (0 = none)",
+    "name": "Name of the part in the ladder and the BOM",
+    "slot": "Series: in the signal path. Shunt: from the signal path to ground",
+    "value": "Nominal value; SI prefixes allowed (4n7, 1.2p)",
+    "dielectric": "Capacitor dielectric: sets the temperature drift (C0G flat, X7R ±15 %, …) and DC-bias loss",
+    "vdc": "DC voltage across the capacitor, for the DC-bias derating",
+    "package": "Package size (text, for the BOM)",
+    "line": "Ideal: give Z0 and εeff directly. Microstrip: computed from the trace width, dielectric height and εr",
+    "length": "Physical length of the line or stub",
+    "w": "Trace width",
+    "h": "Dielectric thickness between the trace and its ground plane",
+    "er": "Relative permittivity of the dielectric",
+    "tand": "Dielectric loss tangent",
+    "w_tol": "Etching tolerance of the trace width (± µm), varied in the analyses",
+    "er_tol": "Tolerance of εr (± %), varied in the analyses",
+    "z0": "Characteristic impedance of the line",
+    "eeff": "Effective permittivity (sets the line's electrical length)",
+    "loss_db_m": "Line loss per metre",
+    "z0_tol": "Tolerance of Z0 (± %), varied in the analyses",
+    "c_z0": "Computed at the band centre (read only)",
+    "c_eeff": "Computed at the band centre (read only)",
+    "c_deg": "Electrical length at the band centre (read only); 90° = a quarter wave",
+}
 
 
 def default_setup():
@@ -241,10 +274,12 @@ class MatchingFrame(wx.Frame):
         self.SetMenuBar(mb)
 
     def _props_page(self, parent):
-        pnl = wx.Panel(parent)
+        pnl = scrolled(parent)
         s = wx.BoxSizer(wx.VERTICAL)
         self.pg = wxpg.PropertyGrid(pnl, style=wxpg.PG_SPLITTER_AUTO_CENTER | wxpg.PG_TOOLTIPS)
         self.pg.Bind(wxpg.EVT_PG_CHANGED, self._pg_changed)
+        self.pg.SetMinSize((280, 300))
+        self.pg.Bind(wx.EVT_MOTION, self._pg_hover)
         s.Add(self.pg, 1, wx.EXPAND | wx.ALL, 2)
         self.pbtns = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_lib = wx.Button(pnl, label="Save part to library…")
@@ -258,10 +293,11 @@ class MatchingFrame(wx.Frame):
             self.pbtns.Add(b, 0, wx.RIGHT, 4)
         s.Add(self.pbtns, 0, wx.ALL, 4)
         pnl.SetSizer(s)
+        pnl.FitInside()
         return pnl
 
     def _sweep_page(self, parent):
-        pnl = wx.Panel(parent)
+        pnl = scrolled(parent)
         s = wx.BoxSizer(wx.VERTICAL)
         g = wx.FlexGridSizer(0, 2, 4, 8)
         self.sw = {}
@@ -269,11 +305,16 @@ class MatchingFrame(wx.Frame):
                            ("z_ref", "Smith chart reference [Ω]")):
             t = wx.TextCtrl(pnl, size=(110, -1))
             t.Bind(wx.EVT_TEXT, lambda e: self._sweep_from_ui())
+            t.SetToolTip({"f_start": "First frequency of the sweep (2.4G, 900M, …)",
+                          "f_stop": "Last frequency of the sweep",
+                          "n_f": "Number of frequency points (the bands add their own points)",
+                          "z_ref": "Reference impedance of the Smith chart and the S-parameters"}[key])
             self.sw[key] = t
             g.Add(wx.StaticText(pnl, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
             g.Add(t)
         self.log_f = wx.CheckBox(pnl, label="Logarithmic sweep")
         self.log_f.Bind(wx.EVT_CHECKBOX, lambda e: self._sweep_from_ui())
+        self.log_f.SetToolTip("Space the points logarithmically (for wide sweeps) instead of evenly")
         s.Add(g, 0, wx.ALL, 6)
         s.Add(self.log_f, 0, wx.LEFT | wx.BOTTOM, 6)
         s.Add(wx.StaticText(pnl, label="Bands and specs (0 = no limit). Frequencies accept 2.4G, 2400M, …"),
@@ -284,6 +325,9 @@ class MatchingFrame(wx.Frame):
             self.bgrid.SetColLabelValue(k, t)
         self.bgrid.SetRowLabelSize(0)
         self.bgrid.Bind(wx.grid.EVT_GRID_CELL_CHANGED, self._band_changed)
+        self.bgrid.GetGridWindow().SetToolTip(
+            "One row per band: f1 to f2, and the spec to meet there: return loss at least RL min, insertion "
+            "loss at most IL max, VSWR at most VSWR max (0 = no limit)")
         s.Add(self.bgrid, 1, wx.EXPAND | wx.ALL, 6)
         row = wx.BoxSizer(wx.HORIZONTAL)
         for text, cmd in (("Add band", self._band_add), ("Delete band", self._band_del)):
@@ -292,10 +336,11 @@ class MatchingFrame(wx.Frame):
             row.Add(b, 0, wx.RIGHT, 4)
         s.Add(row, 0, wx.ALL, 6)
         pnl.SetSizer(s)
+        pnl.FitInside()
         return pnl
 
     def _analysis_page(self, parent):
-        pnl = wx.Panel(parent)
+        pnl = scrolled(parent)
         s = wx.BoxSizer(wx.VERTICAL)
         self.chk = {}
         for key, label in (("corners", "Corners (every variable at both limits)"),
@@ -303,6 +348,12 @@ class MatchingFrame(wx.Frame):
                            ("sens", "Sensitivity (tornado + MC variance share)")):
             self.chk[key] = wx.CheckBox(pnl, label=label)
             self.chk[key].SetValue(True)
+            self.chk[key].SetToolTip({
+                "corners": "Evaluate every combination of each part at its minimum and maximum value",
+                "mc": "Random samples of all parts within their tolerances: yield and spread",
+                "worst": "Search inside the tolerances for the worst response per band (catches worst cases "
+                         "that are not at a corner)",
+                "sens": "Which parts matter most: one-at-a-time swings and each part's share of the variance"}[key])
             s.Add(self.chk[key], 0, wx.LEFT | wx.TOP, 6)
         g = wx.FlexGridSizer(0, 2, 4, 8)
         self.mc_n = wx.SpinCtrl(pnl, min=100, max=200000, initial=self.setup.mc_n, size=(160, -1))
@@ -310,6 +361,9 @@ class MatchingFrame(wx.Frame):
                                                                    "Gaussian, 3σ = tolerance (truncated)"],
                                 majorDimension=1)
         self.seed = wx.SpinCtrl(pnl, min=0, max=10 ** 6, initial=self.setup.seed, size=(160, -1))
+        self.mc_n.SetToolTip("Number of random samples; more = smoother statistics, slower")
+        self.dist.SetToolTip("How each part's value is spread within its tolerance")
+        self.seed.SetToolTip("Seed of the random numbers; the same seed repeats the same samples")
         g.Add(wx.StaticText(pnl, label="Monte Carlo samples"), 0, wx.ALIGN_CENTER_VERTICAL)
         g.Add(self.mc_n)
         g.Add(wx.StaticText(pnl, label="Random seed"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -320,6 +374,9 @@ class MatchingFrame(wx.Frame):
         self.temp = wx.CheckBox(pnl, label="Temperature from")
         self.tmin = wx.TextCtrl(pnl, size=(50, -1))
         self.tmax = wx.TextCtrl(pnl, size=(50, -1))
+        self.temp.SetToolTip("Also vary the temperature over this range (capacitor dielectric drift)")
+        self.tmin.SetToolTip("Lowest temperature [°C]")
+        self.tmax.SetToolTip("Highest temperature [°C]")
         trow.AddMany([(self.temp, 0, wx.ALIGN_CENTER_VERTICAL), (self.tmin, 0, wx.LEFT, 4),
                       (wx.StaticText(pnl, label="to"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 4),
                       (self.tmax,), (wx.StaticText(pnl, label="°C (capacitor dielectric drift)"), 0,
@@ -338,10 +395,11 @@ class MatchingFrame(wx.Frame):
         self.summary = wx.TextCtrl(pnl, style=wx.TE_MULTILINE | wx.TE_READONLY)
         s.Add(self.summary, 1, wx.EXPAND | wx.ALL, 6)
         pnl.SetSizer(s)
+        pnl.FitInside()
         return pnl
 
     def _results_page(self, parent):
-        pnl = wx.Panel(parent)
+        pnl = scrolled(parent)
         s = wx.BoxSizer(wx.VERTICAL)
         s.Add(wx.StaticText(pnl, label="Worst case found by the search (variable values at the worst point)"),
               0, wx.ALL, 4)
@@ -359,6 +417,7 @@ class MatchingFrame(wx.Frame):
             self.bom.InsertColumn(k, t, width=w)
         s.Add(self.bom, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         pnl.SetSizer(s)
+        pnl.FitInside()
         return pnl
 
     def _status(self, t):
@@ -465,6 +524,7 @@ class MatchingFrame(wx.Frame):
         n = len(A.variables(self.setup))
         self.vars_lbl.SetLabel(f"{n} toleranced variable{'s' if n != 1 else ''}: "
                                f"{2 ** n if n <= A.MAX_CORNER_VARS else 'too many'} corners")
+        refit(self.vars_lbl.GetParent())
         if self._timer is not None and self._timer.IsRunning():
             self._timer.Stop()
         self._timer = wx.CallLater(120, self._recompute)
@@ -511,8 +571,19 @@ class MatchingFrame(wx.Frame):
             pg.Append(wxpg.PropertyCategory("Nothing selected"))
             pg.Append(wxpg.StringProperty("Hint", "hint", "Click a part, the source or the load"))
             pg.SetPropertyReadOnly("hint")
+        for name, tip in {**PG_TIPS, **{"p_" + k: v for k, v in PART_TIPS.items()}}.items():
+            if pg.GetPropertyByName(name) and not pg.GetPropertyHelpString(name):
+                pg.SetPropertyHelpString(name, tip)
         self.pbtns.Layout()
-        self.pg.GetParent().Layout()
+        refit(self.pg.GetParent())
+
+    def _pg_hover(self, e):
+        """The row's help string as a tooltip."""
+        e.Skip()
+        prop = self.pg.HitTest(e.GetPosition()).GetProperty()
+        tip = prop.GetHelpString() if prop else ""
+        if (self.pg.GetToolTipText() or "") != tip:
+            self.pg.SetToolTip(tip)
 
     def _props_port(self, port, title):
         pg = self.pg

@@ -1,8 +1,9 @@
 # kicad-analysis-suite
 
-**PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has three tools so far:
+**PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has four tools so far:
 
 - **DC & Thermal**: current density, IR drop and temperature on a real board, including resistance elements, current pulses (fusing) and magnetic field maps.
+- **Switching Loop**: the hot loop and gate loops of a switching power stage (buck, boost, half-bridge): loop inductance and where it sits, ringing frequency, gate-loop and common-source inductance, from a partial-inductance (PEEC) solve of the layout.
 - **Trace R/L/C → SPICE**: R, L, C, Z₀ and delay of the copper between any pads, from a 2D field solve of each cross-section, exported as a SPICE RLC subcircuit.
 - **Matching & Tolerance**: draw an RF matching network with real parts, then see whether it still meets its specs across part tolerances.
 
@@ -27,6 +28,23 @@ Pick the pads where current enters and leaves, or add voltage sources and loads,
 - Tables per pad, via, track and element; export to PDF, HTML, CSV, PNG/SVG and ParaView.
 
 ![DC & Thermal window](docs/screenshots/dc_main.png)
+
+## Switching Loop
+
+Pick the switch node (or let the tool find it): it finds the switching parts, the hot-loop capacitors and the gate drives (driver pin, gate resistor, gate, return pin) and meshes the copper of all their nets, ground included, as conductors. A partial-inductance (PEEC) solve gives the copper's impedance between the parts' pins; the parts add their datasheet models (package inductance, capacitances, ESL).
+
+- For each switching edge: the loop inductance across the switch that turns off, split into board copper and parts, and a bar chart of where it sits (each net and layer, vias, each package, each capacitor's ESL).
+- The ringing frequency and Q with the switch's own capacitance, the expected overshoot per A/ns, and a starting snubber.
+- Per FET: the gate-loop inductance, gate ringing, and the common-source inductance (the mutual between the gate loop and the power loop), which slows switching.
+- Current-density and inductance-density maps at the ringing frequency, board capacitance between the nets, and a SPICE subcircuit of the copper (coupled inductors).
+
+- **Switching edges** (simulated in time): one turn-on and one turn-off of the hard-switched switch at the inductor current you give, with the copper and the parts as one circuit: switch-node overshoot and ringing, dv/dt, di/dt, switching loss (E_on + E_off) × f_sw, reverse recovery, and how far the other FET's gate is pushed toward its threshold (shoot-through risk). A built-in solver uses the datasheet values; a FET can instead use its manufacturer's SPICE model, simulated in ngspice (bundled with KiCad).
+- A cell diagram, readiness checks with one-click fixes, and a plain-language "What it means" summary.
+
+| | |
+|---|---|
+| ![Summary](docs/screenshots/loop_summary.png) | ![Where the L is](docs/screenshots/loop_breakdown.png) |
+| ![Current map](docs/screenshots/loop_map.png) | ![Impedance](docs/screenshots/loop_impedance.png) |
 
 ## Trace R/L/C → SPICE
 
@@ -95,7 +113,7 @@ python3 -m pcb_current_sim board.kicad_pcb --row "J1.2>J2.2:3" --out results   #
 
 ## Status
 
-- DC & Thermal and Matching & Tolerance work and are covered by tests (`python3 -m pytest tests`).
+- DC & Thermal, Switching Loop (inductance, ringing, switching transients), Trace R/L/C → SPICE and Matching & Tolerance work and are covered by tests (`python3 -m pytest tests`).
 - Tested in a running KiCad 10 (Flatpak): both toolbar buttons and the KiCad link (pad selection, save, refill).
 - Developed and tested on Linux with the KiCad 10 Flatpak.
 

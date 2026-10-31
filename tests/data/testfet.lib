@@ -1,0 +1,9 @@
+* A stand-in "vendor" MOSFET model for the tests (ngspice VDMOS), pins in the usual vendor order
+* 1 = drain, 2 = gate, 3 = source
+.SUBCKT TESTFET 1 2 3
+LD 1 11 0.3n
+LS 3 33 0.4n
+RG 2 22 1
+M1 11 22 33 33 NMV
+.MODEL NMV VDMOS(Vto=2.2 Kp=25 Rd=4m Rs=1m Cgdmax=1.2n Cgdmin=35p Cgs=1.4n Cjo=450p Is=2e-12 Rb=8m tt=3n)
+.ENDS TESTFET

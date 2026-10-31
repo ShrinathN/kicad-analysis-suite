@@ -19,6 +19,7 @@ class Session:
         self.library = Library(library_path) if library_path else Library()
         self.kicad = None
         self.kicad_error = None
+        self.highlight = True            # clicking parts in a tool's list selects them in KiCad
         self.last_result = None          # most recent DC result, for the results browser
         self.windows = {}                # tool key -> open window (owned by the GUI layer)
         self._listeners = []

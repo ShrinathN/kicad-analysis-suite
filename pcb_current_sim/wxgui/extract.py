@@ -22,13 +22,23 @@ from ..extract import rlc as X  # noqa: E402
 from ..extract import spice as SP  # noqa: E402
 from ..suite.library import fmt_si, parse_si  # noqa: E402
 from .schematic import colours, draw_dot, draw_ground, draw_symbol  # noqa: E402
+from .crossprobe import CrossProbe, selected_rows  # noqa: E402
+from .layout import refit, scrolled  # noqa: E402
 from .suite import attach_suite_menu  # noqa: E402
 
 OPTS = (("f_max", "f max [Hz]", "si", "Highest frequency of interest: sections are ≤ λ/10 here (≈ 0.35 / t_rise)"),
         ("sample", "Cross-section every [mm]", float, "Spacing of the 2D field solves along each track"),
         ("window", "Return search ± [mm]", float, "Return copper this far either side of a track is used"),
         ("max_section", "Max section [mm] (0 = λ/10)", float, "Extra limit on the ladder section length"),
-        ("T", "Copper temperature [°C]", float, "For R"))
+        ("T", "Copper temperature [°C]", float, "Copper temperature for the resistance (ρ rises about 0.39 %/K)"))
+CHECK_TIPS = {
+    "stubs": "Keep the branches of the net that lead to other pads (as open stubs in the model); unticked, only "
+             "the copper on the paths between the ports is modelled",
+    "pad_c": "Add each pad's capacitance to the return copper",
+    "dc_solver": "Scale the ladder's resistances so the end-to-end R matches the DC field solver (accounts for "
+                 "current crowding at corners and pads)",
+    "dielectric_g": "Add the dielectric's loss as a conductance G across each capacitance (from tanδ at f max)",
+}
 CHECKS = (("stubs", "Include stubs (branches to other pads)"),
           ("pad_c", "Pad capacitance"),
           ("dc_solver", "Calibrate R with the DC field solution"),
@@ -82,6 +92,8 @@ class PadDialog(wx.Dialog):
         self.part = wx.Choice(self, choices=self.refs)
         self.pad = wx.Choice(self, size=(220, -1))
         self.part.Bind(wx.EVT_CHOICE, lambda e: self._fill())
+        self.part.SetToolTip("The part (footprint) whose pad becomes the port")
+        self.pad.SetToolTip("The pad that becomes the port (its net in brackets)")
         g = wx.FlexGridSizer(0, 2, 6, 8)
         g.AddMany([(wx.StaticText(self, label="Part"), 0, wx.ALIGN_CENTER_VERTICAL), (self.part, 1, wx.EXPAND),
                    (wx.StaticText(self, label="Pad"), 0, wx.ALIGN_CENTER_VERTICAL), (self.pad, 1, wx.EXPAND)])
@@ -199,6 +211,11 @@ class ExtractFrame(wx.Frame):
         self._load_setup()
         self._build()
         attach_suite_menu(self, session, "extract")
+        pref = lambda pid: pid.rsplit(".", 1)[0]          # noqa: E731 - pad id "R1.2" -> part "R1"
+        self.probe = CrossProbe(self, session)
+        self.probe.watch(self.plist, lambda lc: [pref(self.ports[i]) for i in selected_rows(lc) if i < len(self.ports)])
+        self.probe.watch(self.elist, lambda lc: [pref(p) for i in selected_rows(lc) if i < len(self.elements)
+                                                 for p in (self.elements[i].a, self.elements[i].b)])
         session.listen(self._on_session)
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self._to_ui()
@@ -244,8 +261,7 @@ class ExtractFrame(wx.Frame):
     # ------------------------------------------------------------- UI
     def _build(self):
         sp = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
-        left = wx.ScrolledWindow(sp)
-        left.SetScrollRate(0, 20)
+        left = self.left = scrolled(sp)
         ls = wx.BoxSizer(wx.VERTICAL)
 
         pb = wx.StaticBoxSizer(wx.VERTICAL, left, "Ports (pads, in order: P1, P2, …)")
@@ -253,6 +269,8 @@ class ExtractFrame(wx.Frame):
         self.plist = wx.ListCtrl(pbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 130))
         for k, (t, w) in enumerate((("Port", 50), ("Pad", 110), ("Net", 140))):
             self.plist.InsertColumn(k, t, width=w)
+        self.plist.SetToolTip("The pads where the model's terminals are (P1, P2, … in this order). All ports "
+                              "must be on one net, or nets joined by elements")
         pb.Add(self.plist, 1, wx.EXPAND | wx.ALL, 4)
         row = wx.WrapSizer()
         for text, fn in (("Add pad…", self._add_pad), ("Remove", self._del_pad), ("Up", lambda: self._move(-1)),
@@ -270,6 +288,8 @@ class ExtractFrame(wx.Frame):
         rb = wx.StaticBoxSizer(wx.VERTICAL, left, "Return (reference) nets")
         rbox = rb.GetStaticBox()
         self.nets = wx.CheckListBox(rbox, size=(-1, 140))
+        self.nets.SetToolTip("The nets the signal's return current flows in (the model's REF node): usually GND, "
+                             "plus power planes that are decoupled to ground")
         rb.Add(self.nets, 1, wx.EXPAND | wx.ALL, 4)
         b = wx.Button(rbox, label="Guess (GND-like)", style=wx.BU_EXACTFIT)
         b.Bind(wx.EVT_BUTTON, lambda e: self._guess())
@@ -284,6 +304,8 @@ class ExtractFrame(wx.Frame):
         for k, (t, w) in enumerate((("On", 35), ("Name", 55), ("Kind", 85), ("Value", 80), ("Pads", 140))):
             self.elist.InsertColumn(k, t, width=w)
         self.elist.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._el_edit())
+        self.elist.SetToolTip("Parts placed between pads (resistors, diodes, ideal C and L); nets joined by "
+                              "them are modelled together. Double-click to edit")
         eb.Add(self.elist, 1, wx.EXPAND | wx.ALL, 4)
         row = wx.WrapSizer()
         for text, fn in (("Add…", self._el_add), ("Edit…", self._el_edit), ("On/off", self._el_toggle),
@@ -314,6 +336,7 @@ class ExtractFrame(wx.Frame):
         self.checks = {}
         for key, label in CHECKS:
             c = wx.CheckBox(obox, label=label)
+            c.SetToolTip(CHECK_TIPS.get(key, label))
             self.checks[key] = c
             ob.Add(c, 0, wx.ALL, 3)
         ls.Add(ob, 0, wx.EXPAND | wx.ALL, 6)
@@ -328,6 +351,7 @@ class ExtractFrame(wx.Frame):
             "no radiation, no coupling to other signal nets. Save the board\n"
             "in KiCad first.")), 0, wx.ALL, 6)
         left.SetSizer(ls)
+        left.FitInside()
 
         nb = self.nb = wx.Notebook(sp)
         # summary
@@ -459,6 +483,7 @@ class ExtractFrame(wx.Frame):
                              f"{299792458 / (f * math.sqrt(3.3)) / 10 * 1e3:.3g} mm")
         except (ValueError, TypeError, ZeroDivisionError):
             self.tr.SetLabel("")
+        refit(self.left)
 
     # ------------------------------------------------------------- ports
     def _net(self):

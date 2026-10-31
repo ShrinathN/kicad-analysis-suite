@@ -56,6 +56,11 @@ def open_window(session, key, parent=None):
             return wx.MessageBox("Load a board first.", "Trace R/L/C", parent=parent)
         from .extract import ExtractFrame
         w = ExtractFrame(session)
+    elif key == "loop":
+        if session.board is None:
+            return wx.MessageBox("Load a board first.", "Switching Loop", parent=parent)
+        from .loop import LoopFrame
+        w = LoopFrame(session)
     elif key == "stackup":
         if session.stackup is None:
             return wx.MessageBox("Load a board first.", "Stackup", parent=parent)
@@ -91,6 +96,22 @@ def attach_suite_menu(frame, session, current=None):
     m.AppendSeparator()
     for key, label, help_ in SHARED:
         item(label, key, key != current, help_)
+    m.AppendSeparator()
+    hl = m.AppendCheckItem(wx.ID_ANY, "Highlight selected parts in KiCad",
+                           "Clicking parts in a tool's list selects them in the PCB editor (and the schematic "
+                           "editor, where KiCad allows it)")
+    hl.Check(getattr(session, "highlight", True))
+
+    def toggle(e):
+        session.highlight = e.IsChecked()
+        for w in list(session.windows.values()):      # keep every window's menu in step
+            if w and w is not frame and getattr(w, "_hl_item", None):
+                try:
+                    w._hl_item.Check(session.highlight)
+                except RuntimeError:
+                    pass
+    frame.Bind(wx.EVT_MENU, toggle, hl)
+    frame._hl_item = hl
     mb.Append(m, "&Suite")
     if frame.GetMenuBar() is None:
         frame.SetMenuBar(mb)
@@ -109,6 +130,7 @@ class HomeFrame(wx.Frame):
         hs = hb.GetStaticBox()
         row = wx.BoxSizer(wx.HORIZONTAL)
         self.path = wx.TextCtrl(hs, style=wx.TE_READONLY)
+        self.path.SetToolTip("The board all the suite's tools work on (Browse… to pick another)")
         for text, cmd in (("Browse…", self._browse), ("Reload", self._reload)):
             b = wx.Button(hs, label=text)
             b.Bind(wx.EVT_BUTTON, lambda e, c=cmd: c())
@@ -236,12 +258,17 @@ class StackupFrame(wx.Frame):
             self.grid.SetColLabelValue(k, c)
         self.grid.SetRowLabelSize(0)
         self.grid.Bind(wx.grid.EVT_GRID_CELL_CHANGED, self._changed)
+        self.grid.GetGridWindow().SetToolTip(
+            "Used t: copper thickness used by the tools (0 = the board's value). εr / tanδ: the dielectric's "
+            "permittivity and loss tangent at f_ref (from the laminate datasheet)")
         top.Add(wx.StaticText(p, label="Grey cells are read-only. Copper: finished thickness (0 = board value). "
                                        "Dielectric: εr and tanδ at f_ref."), 0, wx.ALL, 6)
         top.Add(self.grid, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
         row = wx.BoxSizer(wx.HORIZONTAL)
         self.model = wx.Choice(p, choices=["Wideband Djordjevic-Sarkar (causal)", "Constant εr, tanδ"])
         self.model.Bind(wx.EVT_CHOICE, lambda e: self._set_model())
+        self.model.SetToolTip("Djordjevic-Sarkar: εr falls and tanδ changes with frequency, fitted at f_ref "
+                              "(realistic for FR4). Constant: the values at f_ref at every frequency")
         reset = wx.Button(p, label="Reset to board values")
         reset.Bind(wx.EVT_BUTTON, lambda e: self._reset())
         row.AddMany([(wx.StaticText(p, label="Frequency model"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6),
@@ -366,6 +393,19 @@ PART_FIELDS = {  # kind -> [(attr, label, unit or None for plain text/number)]
           ("v_rated", "Rated V", "V"), ("bias_loss", "C lost at rated V [%]", "%")],
     "R": [("ls", "Series L", "H"), ("cp", "Parallel C", "F")],
 }
+PART_TIPS = {  # hover help for PART_FIELDS (by attribute)
+    "dcr": "DC resistance of the winding",
+    "q": "Quality factor at the frequency below (datasheet); sets the frequency-dependent loss. 0 = no Q given",
+    "f_q": "The frequency the Q is given at",
+    "srf": "Self-resonant frequency (datasheet); sets the parasitic C of an inductor or the ESL of a capacitor. "
+           "0 = none",
+    "esr": "Equivalent series resistance; 0 = derived from Q",
+    "esl": "Equivalent series inductance; 0 = derived from the SRF",
+    "v_rated": "Rated voltage, used for the DC-bias derating",
+    "bias_loss": "Percentage of C lost at the rated voltage (X7R / X5R: 50-80 %; C0G: 0)",
+    "ls": "Parasitic series inductance of the resistor body",
+    "cp": "Parasitic capacitance across the resistor",
+}
 
 
 class PartDialog(wx.Dialog):
@@ -385,12 +425,18 @@ class PartDialog(wx.Dialog):
         self.kind = add("Kind", wx.Choice(self, choices=[KINDS[k][0] for k in KINDS]))
         self.kind.SetSelection(list(KINDS).index(part.kind))
         self.kind.Bind(wx.EVT_CHOICE, lambda e: self._show())
+        self.kind.SetToolTip("Inductor, capacitor or resistor (sets which parasitics are asked for)")
         self.name = add("Name / part number", wx.TextCtrl(self, value=part.name))
         self.value = add("Value", wx.TextCtrl(self, value=fmt_si(part.value, part.unit)))
         tolrow = wx.BoxSizer(wx.HORIZONTAL)
         self.tol = wx.TextCtrl(self, value=part.tol_text().replace(" %", ""), size=(110, -1))
         self.tol_unit = wx.Choice(self, choices=["%", "absolute"])
         self.tol_unit.SetSelection(0 if part.tol_unit == "%" else 1)
+        self.name.SetToolTip("Name or manufacturer part number (unique in the library)")
+        self.value.SetToolTip("Nominal value; SI prefixes allowed (4n7, 100 nH, 2.2u)")
+        self.tol.SetToolTip("Tolerance: a percentage, an absolute value (0.1 pF), or a capacitor code "
+                            "A/B/C/D = ±0.05/0.1/0.25/0.5 pF")
+        self.tol_unit.SetToolTip("Whether the tolerance is a percentage or an absolute value")
         tolrow.AddMany([(self.tol,), (self.tol_unit, 0, wx.LEFT, 4)])
         g.Add(wx.StaticText(self, label="Tolerance ±"), 0, wx.ALIGN_CENTER_VERTICAL)
         g.Add(tolrow)
@@ -398,6 +444,10 @@ class PartDialog(wx.Dialog):
         self.mfr = add("Manufacturer", wx.TextCtrl(self, value=part.mfr))
         self.diel = add("Dielectric", wx.Choice(self, choices=list(DIELECTRICS)))
         self.diel.SetSelection(DIELECTRICS.index(part.dielectric) if part.dielectric in DIELECTRICS else 0)
+        self.package.SetToolTip("Package size, e.g. 0402 (also hints the ESL)")
+        self.mfr.SetToolTip("Manufacturer (for the BOM)")
+        self.diel.SetToolTip("Capacitor dielectric: sets the temperature drift and DC-bias loss (C0G flat, X7R / "
+                             "X5R lose C with temperature and voltage)")
         self.extra = {}
         for kind, flist in PART_FIELDS.items():
             for attr, label, unit in flist:
@@ -406,9 +456,11 @@ class PartDialog(wx.Dialog):
                 v = getattr(part, attr)
                 txt = f"{v * 100:g}" if unit == "%" else (fmt_si(v, unit) if unit else f"{v:g}")
                 self.extra[attr] = (wx.StaticText(self, label=label), wx.TextCtrl(self, value=txt), unit)
+                self.extra[attr][1].SetToolTip(PART_TIPS.get(attr, label))
                 g.Add(self.extra[attr][0], 0, wx.ALIGN_CENTER_VERTICAL)
                 g.Add(self.extra[attr][1], 1, wx.EXPAND)
         self.notes = add("Notes", wx.TextCtrl(self, value=part.notes))
+        self.notes.SetToolTip("Free text (source of the data, remarks)")
         self.hint = wx.StaticText(self, label="Values accept SI prefixes: 4.7n, 4n7, 100 nH, 2.4G, 0R1. "
                                               "Capacitor tolerance codes A/B/C/D = ±0.05/0.1/0.25/0.5 pF.")
         s = wx.BoxSizer(wx.VERTICAL)
@@ -475,6 +527,7 @@ class LibraryFrame(wx.Frame):
         row = wx.BoxSizer(wx.HORIZONTAL)
         self.filter = wx.Choice(p, choices=["All"] + [KINDS[k][0] + "s" for k in KINDS])
         self.filter.SetSelection(0)
+        self.filter.SetToolTip("Show only one kind of part")
         self.filter.Bind(wx.EVT_CHOICE, lambda e: self._fill())
         row.AddMany([(wx.StaticText(p, label="Show"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6), (self.filter,)])
         for text, cmd in (("Add…", self._add), ("Edit…", self._edit), ("Duplicate", self._dup),
@@ -633,6 +686,7 @@ class ResultsFrame(wx.Frame):
             b = wx.Button(p, label=text)
             b.Bind(wx.EVT_BUTTON, lambda e, c=cmd: c())
             row.Add(b, 0, wx.LEFT, 4)
+        self.root.SetToolTip("Folder searched (with its subfolders) for saved simulation results")
         row.Insert(0, wx.StaticText(p, label="Search in"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         row.Insert(1, self.root, 1, wx.EXPAND)
         top.Add(row, 0, wx.EXPAND | wx.ALL, 6)

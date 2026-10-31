@@ -10,6 +10,7 @@ from .. import solver as S
 from ..scenario import load_scenario, save_scenario, scenario_path
 from ..suite.session import Session
 from ..tables import CHECKS, FLOAT_SETTINGS, ROW_TEXT
+from .layout import refit, scrolled
 
 
 def _list(parent, cols):
@@ -54,6 +55,16 @@ class RowDialog(wx.Dialog):
         self.lsnk = wx.ListBox(self, style=wx.LB_EXTENDED, size=(220, 240))
         self.nsrc.Bind(wx.EVT_CHOICE, lambda e: self._fill_one(self.nsrc, self.lsrc))
         self.nsnk.Bind(wx.EVT_CHOICE, lambda e: self._fill_one(self.nsnk, self.lsnk))
+        self.name.SetToolTip("A name for this row, shown in the table and the results")
+        self.cur.SetToolTip("Amps for a current path or a load, volts for a voltage source")
+        self.kind.SetToolTip("Current path: a current forced from the source pads to the sink pads. Load: a "
+                             "current sink between + and − pads. Voltage source: holds V(+) − V(−)")
+        self.nsrc.SetToolTip("The net of the source / + pads (lists that net's pads below)")
+        self.nsnk.SetToolTip("The net of the sink / − pads (lists that net's pads below)")
+        self.lsrc.SetToolTip("Pads where the current enters (or the + side); several pads are tied together. "
+                             "Ctrl / Shift-click to select several")
+        self.lsnk.SetToolTip("Pads where the current leaves (or the − side); several pads are tied together. "
+                             "Ctrl / Shift-click to select several")
 
         self.vlabel = wx.StaticText(self, label="Current [A]")
         self.slabel, self.klabel = wx.StaticText(self, label=""), wx.StaticText(self, label="")
@@ -143,6 +154,9 @@ class ElementDialog(wx.Dialog):
                 pc.SetSelection(self.refs.index(ref))
             pd = wx.Choice(self, size=(220, -1))
             pc.Bind(wx.EVT_CHOICE, lambda e, k=k: self._pads(k))
+            pc.SetToolTip(f"The part (footprint) that pad {'AB'[k]} belongs to")
+            pd.SetToolTip(f"Pad {'AB'[k]}: one end of the element" + (" (the anode for a constant drop)" if k == 0
+                                                                       else " (the cathode for a constant drop)"))
             self.part.append(pc)
             self.pad.append(pd)
             row = wx.BoxSizer(wx.HORIZONTAL)
@@ -165,6 +179,17 @@ class ElementDialog(wx.Dialog):
         self.model.Bind(wx.EVT_RADIOBOX, lambda e: self._model())
         self.heats = wx.CheckBox(self, label="Dissipates on the board (untick for an external load or wire)")
         self.heats.SetValue(el.heats)
+        self.name.SetToolTip("A name for the element (unique), e.g. Q1_Ron or R_load")
+        self.R.SetToolTip("Resistance between the two pads (or the series R of a constant drop). "
+                          "Values like 4k7, 0R1, 5m")
+        self.P.SetToolTip("Power rating, to flag overload in the results (blank = not checked)")
+        self.model.SetToolTip("What sits between the two pads: a resistance, a diode-like constant drop "
+                              "(Vf + R, conducting A -> B only), an ideal capacitor or an ideal inductor")
+        self.X.SetToolTip("The capacitance (F) or inductance (H) of an ideal C / L element, e.g. 100n, 4u7")
+        self.Vf.SetToolTip("Forward voltage of a constant-drop element (a diode's Vf); it conducts only when "
+                           "V(A) − V(B) > Vf")
+        self.heats.SetToolTip("Ticked: the element's I²R heats the board at its pads. Unticked: the power is "
+                              "dissipated elsewhere (an external load, a wire or cable)")
         g.AddMany([(wx.StaticText(self, label="Name"), 0, wx.ALIGN_CENTER_VERTICAL), (self.name, 1, wx.EXPAND),
                    (wx.StaticText(self, label="Forward drop Vf [V]"), 0, wx.ALIGN_CENTER_VERTICAL), (self.Vf, 1, wx.EXPAND),
                    (self.R_label, 0, wx.ALIGN_CENTER_VERTICAL), (self.R, 1, wx.EXPAND),
@@ -259,6 +284,34 @@ class ElementDialog(wx.Dialog):
         self.EndModal(wx.ID_OK)
 
 
+SETTING_TIPS = {
+    "pitch": "Electrical grid cell size in mm, or 'auto' (chosen from the copper size and the cell limit). "
+             "Smaller = more accurate and slower",
+    "t_plate": "Copper plating thickness of via and plated-hole barrels (µm); sets the barrels' R and heat flow",
+    "T_cold": "Copper temperature used when electro-thermal coupling is off (sets ρ)",
+    "T_amb": "Ambient air temperature around the board",
+    "h_conv": "Heat-transfer coefficient per board face (convection + radiation) when 'h from temperature' is "
+              "off; about 10 W/m²K in still air",
+    "emissivity": "Surface emissivity for the radiation part of the automatic h (solder mask about 0.9)",
+    "k_fr4": "Thermal conductivity of the dielectric (FR4 about 0.3 W/mK)",
+    "thermal_pitch": "Thermal grid cell size in mm (0 = as fine as the cell limit allows)",
+    "rho20": "Copper resistivity at 20 °C (annealed copper 1.72e-8 Ω·m)",
+    "b_height": "Distance above the top / below the bottom surface where the magnetic field maps are computed",
+    "pulse_scale": "Pulse amplitude as a multiple of the table's currents / voltages",
+    "pulse_ms": "Length of the rectangular pulse for the transient heating / fusing check",
+}
+CHECK_TIPS = {
+    "thermal": "Solve the temperature and let copper resistance rise with it (ρ(T)), iterated to a steady state",
+    "h_auto": "Heat loss from each face computed from its own temperature (natural convection + radiation) "
+              "instead of the fixed h",
+    "error_estimate": "Also solve on a 2x coarser grid and report how much the results change",
+    "auto_resistors": "Treat resistor footprints as resistance elements, with their value from the Value field",
+    "crop": "Mesh only the area around the simulated nets' copper (faster; the results are the same)",
+    "magnetic": "Compute the magnetic field maps and each row's loop inductance",
+    "pulse": "Also simulate a short rectangular pulse: transient heating and fusing of thin tracks",
+    "pulse_from_steady": "The pulse starts from the steady-state temperatures (else from ambient)",
+}
+
 SETTINGS = [("pitch", "Grid pitch [mm] / auto"), ("t_plate", "Barrel plating [µm]"),
             ("T_cold", "Cu temp., no thermal [°C]"), ("T_amb", "Ambient [°C]"),
             ("h_conv", "h per face [W/m²K] (fixed)"), ("emissivity", "Emissivity (auto h)"),
@@ -282,6 +335,13 @@ class MainFrame(wx.Frame):
         self._build()
         from .suite import attach_suite_menu
         attach_suite_menu(self, self.session, "dc")
+        from .crossprobe import CrossProbe, selected_rows
+        pref = lambda pid: pid.rsplit(".", 1)[0]          # noqa: E731 - pad id "R1.2" -> part "R1"
+        self.probe = CrossProbe(self, self.session)
+        self.probe.watch(self.tree, lambda lc: [pref(p) for i in selected_rows(lc) if i < len(self.rows)
+                                                for p in self.rows[i].src + self.rows[i].snk])
+        self.probe.watch(self.etree, lambda lc: [pref(p) for i in selected_rows(lc) if i < len(self.elements)
+                                                 for p in (self.elements[i].a, self.elements[i].b)])
         if use_kicad and self.session.kicad is None:
             kp = self.session.connect_kicad()
             board_path = board_path or kp
@@ -316,11 +376,13 @@ class MainFrame(wx.Frame):
 
     # ------------------------------------------------------------- layout
     def _build(self):
-        p = self.panel = wx.Panel(self)
+        p = self.panel = scrolled(self)
         top = wx.BoxSizer(wx.VERTICAL)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         self.path = wx.TextCtrl(p)
+        self.path.SetToolTip("The .kicad_pcb file that is simulated (KiCad's saved file, not the editor's "
+                             "unsaved state)")
         b1, b2 = wx.Button(p, label="Browse…"), wx.Button(p, label="Reload")
         b1.Bind(wx.EVT_BUTTON, self._browse)
         b2.Bind(wx.EVT_BUTTON, lambda e: self.load_board(self.path.GetValue(), load_table=False))
@@ -339,6 +401,7 @@ class MainFrame(wx.Frame):
         self.tree = _list(sb, [("Name", 110), ("Kind", 110), ("Source / + pads", 200), ("Sink / − pads", 200),
                                ("Value", 80), ("Net", 200)])
         self.tree.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._edit())
+        self.tree.SetToolTip("Current paths, loads and voltage sources; double-click a row to edit it")
         box.Add(self.tree, 1, wx.EXPAND | wx.ALL, 4)
         bcol = wx.BoxSizer(wx.HORIZONTAL)
         self.sel_btn = wx.Button(sb, label="Add from KiCad selection")
@@ -366,6 +429,8 @@ class MainFrame(wx.Frame):
                                 ("Value", 110), ("Rating [W]", 80), ("Nets", 220), ("Heats board", 85),
                                 ("Source", 60)])
         self.etree.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._el_edit())
+        self.etree.SetToolTip("Resistances (and diodes) between pads: resistor footprints found on the board "
+                              "and elements you add. Double-click to edit")
         ebox.Add(self.etree, 1, wx.EXPAND | wx.ALL, 4)
         ecol = wx.BoxSizer(wx.HORIZONTAL)
         self.esel_btn = wx.Button(eb, label="Add from KiCad selection (2 pads)")
@@ -388,6 +453,7 @@ class MainFrame(wx.Frame):
         self.vars = {}
         for key, label in SETTINGS:
             self.vars[key] = wx.TextCtrl(ss, size=(90, -1))
+            self.vars[key].SetToolTip(SETTING_TIPS.get(key, label))
             g.Add(wx.StaticText(ss, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
             g.Add(self.vars[key])
         left = wx.BoxSizer(wx.VERTICAL)
@@ -396,6 +462,7 @@ class MainFrame(wx.Frame):
         self.checks = {}
         for key, label in CHECKS:
             self.checks[key] = wx.CheckBox(ss, label=label)
+            self.checks[key].SetToolTip(CHECK_TIPS.get(key, label))
             cg.Add(self.checks[key])
         self.autor = self.checks["auto_resistors"]
         self.autor.Bind(wx.EVT_CHECKBOX, lambda e: self._refresh_elements())
@@ -405,6 +472,8 @@ class MainFrame(wx.Frame):
         right.Add(wx.StaticText(ss, label="Copper thickness (double-click to override)"))
         self.ltree = _list(ss, [("Layer", 70), ("Board [µm]", 85), ("Used [µm]", 80)])
         self.ltree.SetMinSize((245, -1))
+        self.ltree.SetToolTip("Copper thickness per layer: from the board's stackup, or your override "
+                              "(double-click a layer)")
         self.ltree.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._edit_thickness)
         right.Add(self.ltree, 1, wx.EXPAND)
         sbox.Add(right, 1, wx.EXPAND | wx.ALL, 4)
@@ -422,6 +491,7 @@ class MainFrame(wx.Frame):
                       (self.status, 1, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)])
         top.Add(rrow, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         p.SetSizer(top)
+        p.FitInside()
 
     def _status(self, text):
         self.status.SetLabel(text)
@@ -436,7 +506,7 @@ class MainFrame(wx.Frame):
             b.Bind(wx.EVT_BUTTON, lambda e, c=cmd: c())
             self.kbar.Add(b, 0, wx.RIGHT, 4)
         self.kbar.Insert(0, wx.StaticText(self.panel, label="KiCad:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        self.panel.Layout()
+        refit(self.panel)
 
     def _k_save(self):
         try:
@@ -504,6 +574,7 @@ class MainFrame(wx.Frame):
                            f"{len(b.tracks)} tracks, {len(b.vias)} vias, {len(b.zones)} zone fills"
                            + ("" if b.stackup_found else "  -  no stackup in file: 35 µm default")
                            + ("  -  " + b.warnings[0] if b.warnings else ""))
+        refit(self.panel)
         sp = scenario_path(path)
         if load_table and os.path.exists(sp):
             try:

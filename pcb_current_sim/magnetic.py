@@ -24,6 +24,7 @@ import numpy as np
 import scipy.fft as sfft
 import scipy.sparse as sp
 
+from . import THREADS
 from .raster import Grid
 
 MU0_4PI = 1e-7
@@ -123,13 +124,13 @@ class FFTConv:
     def kernel(self, K):
         Kc = np.zeros(self.N)
         Kc[:K.shape[0], :K.shape[1]] = K
-        return sfft.rfft2(np.roll(Kc, (-(self.ny - 1), -(self.nx - 1)), axis=(0, 1)), workers=-1)
+        return sfft.rfft2(np.roll(Kc, (-(self.ny - 1), -(self.nx - 1)), axis=(0, 1)), workers=THREADS)
 
     def fwd(self, a):
-        return sfft.rfft2(a, s=self.N, workers=-1)
+        return sfft.rfft2(a, s=self.N, workers=THREADS)
 
     def inv(self, F):
-        return sfft.irfft2(F, s=self.N, workers=-1)[:self.ny, :self.nx]
+        return sfft.irfft2(F, s=self.N, workers=THREADS)[:self.ny, :self.nx]
 
 
 def grover_parallel(a1, a2, b1, b2, d):

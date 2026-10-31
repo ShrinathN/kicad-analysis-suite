@@ -16,6 +16,9 @@ GROUPS = ("POWER", "SIGNAL & FIELDS", "RF / CIRCUIT")
 TOOLS = (
     Tool("dc", "DC & Thermal", "POWER",
          "Current density, IR drop, resistance elements, electro-thermal, pulse / fusing, DC B-field.", True),
+    Tool("loop", "Switching Loop", "POWER",
+         "Hot loop and gate loops of switching stages: loop L and where it sits, ringing, common-source L.",
+         True),
     Tool("pdn", "PDN (AC)", "POWER",
          "Z(f) against target impedance, decaps, VRM, plane resonances, loop L(f)."),
     Tool("extract", "Trace R/L/C → SPICE", "SIGNAL & FIELDS",
