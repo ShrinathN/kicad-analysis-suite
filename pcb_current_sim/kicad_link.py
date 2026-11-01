@@ -51,6 +51,17 @@ class KiCadLink:
                 ids.append(best.id)
         return ids
 
+    def selected_refs(self):
+        """References of the footprints selected in the PCB editor (in selection order)."""
+        from kipy.board_types import FootprintInstance
+        out = []
+        for item in self.board.get_selection():
+            if isinstance(item, FootprintInstance):
+                r = _ref(item)
+                if r and r not in out:
+                    out.append(r)
+        return out
+
     def select_items(self, uuids):
         """Select the tracks and vias with these uuids in the PCB editor; returns how many."""
         uuids = set(uuids)

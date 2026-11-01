@@ -1,5 +1,6 @@
 """wxPython main window (used inside KiCad, whose Python ships wx but not Tk)."""
 import os
+import re
 import threading
 import traceback
 
@@ -9,12 +10,12 @@ from .. import elements as EL
 from .. import solver as S
 from ..scenario import load_scenario, save_scenario, scenario_path
 from ..suite.session import Session
-from ..tables import CHECKS, FLOAT_SETTINGS, ROW_TEXT
-from .layout import refit, scrolled
+from ..tables import CHECKS, FLOAT_SETTINGS, ROW_TEXT, fmt_amount, parse_amount
+from .layout import AutoList, refit, scrolled
 
 
 def _list(parent, cols):
-    lc = wx.ListCtrl(parent, style=wx.LC_REPORT)
+    lc = AutoList(parent, style=wx.LC_REPORT)
     for k, (title, w) in enumerate(cols):
         lc.InsertColumn(k, title, width=w)
     return lc
@@ -34,7 +35,7 @@ class RowDialog(wx.Dialog):
     def __init__(self, parent, board, row, default_name):
         super().__init__(parent, title="Excitation", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.board, self.result = board, None
-        self.nets = [n for n in board.nets if board.pad_ids(n)]
+        self.nets = sorted((n for n in board.nets if board.pad_ids(n)), key=EL.natural_key)
         row = row or S.Row(default_name, [], [], 1.0)
 
         def net_of(ids, other=()):
@@ -42,7 +43,7 @@ class RowDialog(wx.Dialog):
             return ps[0].net if ps else (self.nets[0] if self.nets else "")
 
         self.name = wx.TextCtrl(self, value=row.name)
-        self.cur = wx.TextCtrl(self, value=f"{row.current:g}", size=(90, -1))
+        self.cur = wx.TextCtrl(self, value=fmt_amount(row.current, row.unit), size=(110, -1))
         self.kinds = list(S.KINDS)
         self.kind = wx.Choice(self, choices=[S.KINDS[k] for k in self.kinds])
         self.kind.SetSelection(self.kinds.index(row.kind))
@@ -56,7 +57,8 @@ class RowDialog(wx.Dialog):
         self.nsrc.Bind(wx.EVT_CHOICE, lambda e: self._fill_one(self.nsrc, self.lsrc))
         self.nsnk.Bind(wx.EVT_CHOICE, lambda e: self._fill_one(self.nsnk, self.lsnk))
         self.name.SetToolTip("A name for this row, shown in the table and the results")
-        self.cur.SetToolTip("Amps for a current path or a load, volts for a voltage source")
+        self.cur.SetToolTip("Amps for a current path or a load, volts for a voltage source. SI prefixes and the "
+                            "unit are allowed: 1m, 500mA, 2.5 A, 1u, 1k, 1M (mega), 12 V, 3V3")
         self.kind.SetToolTip("Current path: a current forced from the source pads to the sink pads. Load: a "
                              "current sink between + and − pads. Voltage source: holds V(+) − V(−)")
         self.nsrc.SetToolTip("The net of the source / + pads (lists that net's pads below)")
@@ -85,6 +87,11 @@ class RowDialog(wx.Dialog):
         top = wx.BoxSizer(wx.VERTICAL)
         top.Add(g, 0, wx.EXPAND | wx.ALL, 10)
         top.Add(lists, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        swap = wx.Button(self, label="⇄  Swap source and sink")
+        swap.SetToolTip("Exchange the two sides: the source / + pads become the sink / − pads and the other way "
+                        "round (a KiCad selection often comes in the wrong order)")
+        swap.Bind(wx.EVT_BUTTON, lambda e: self._swap())
+        top.Add(swap, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.TOP, 6)
         top.Add(self.hint, 0, wx.ALL, 10)
         top.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 10)
         self.SetSizerAndFit(top)
@@ -102,13 +109,21 @@ class RowDialog(wx.Dialog):
                                   "Ctrl/Shift-click to select several.")
         self.Layout()
 
+    def _swap(self):
+        src = [self.lsrc.GetString(i) for i in self.lsrc.GetSelections()]
+        snk = [self.lsnk.GetString(i) for i in self.lsnk.GetSelections()]
+        a, b = self.nsrc.GetSelection(), self.nsnk.GetSelection()
+        self.nsrc.SetSelection(b)
+        self.nsnk.SetSelection(a)
+        self._fill(snk, src)
+
     def _fill(self, src=(), snk=()):
         self._fill_one(self.nsrc, self.lsrc, src)
         self._fill_one(self.nsnk, self.lsnk, snk)
 
     def _fill_one(self, ch, lb, sel=()):
         k = ch.GetSelection()
-        ids = self.board.pad_ids(self.nets[k]) if k != wx.NOT_FOUND else []
+        ids = sorted(self.board.pad_ids(self.nets[k]), key=EL.natural_key) if k != wx.NOT_FOUND else []
         lb.Set(ids)
         for i, pid in enumerate(ids):
             if pid in sel:
@@ -118,9 +133,10 @@ class RowDialog(wx.Dialog):
         src = [self.lsrc.GetString(i) for i in self.lsrc.GetSelections()]
         snk = [self.lsnk.GetString(i) for i in self.lsnk.GetSelections()]
         try:
-            cur = float(self.cur.GetValue())
+            cur = parse_amount(self.cur.GetValue(), "V" if self.kinds[self.kind.GetSelection()] == "V" else "A")
         except ValueError:
-            return wx.MessageBox("The value must be a number.", "Excitation", parent=self)
+            return wx.MessageBox("The value must be a number, with an SI prefix and unit if you like: 0.5, 500m, "
+                                 "500mA, 2.5 A, 12 V, 3V3 (m = milli, M = mega).", "Excitation", parent=self)
         if not src or not snk:
             return wx.MessageBox("Select at least one source and one sink pad.", "Excitation", parent=self)
         if set(src) & set(snk):
@@ -284,6 +300,197 @@ class ElementDialog(wx.Dialog):
         self.EndModal(wx.ID_OK)
 
 
+REG_FIELDS = (  # key, label, unit for parse_si ("" plain), tooltip, models it applies to
+    ("Vout", "Output voltage [V]", "V", "The regulated voltage, OUT − GND at the regulator's own pins (so drops in the "
+                                       "ground copper show at the loads)", ("LDO", "SMPS")),
+    ("Iq", "Quiescent current [A]", "A", "Current the regulator draws for itself, from IN to GND (datasheet I_Q or "
+                                          "I_GND), e.g. 50u", ("LDO", "SMPS")),
+    ("Vf", "Dropout voltage [V]", "V", "The smallest IN − OUT at which it still regulates (datasheet V_DO at your "
+                                       "load). Below it the output follows the input minus this drop", ("LDO",)),
+    ("R", "Resistance in dropout [Ω]", "Ω", "Optional extra resistance of the pass device when it is fully on "
+                                            "(0 = the dropout voltage only)", ("LDO",)),
+    ("eta", "Efficiency [%]", "", "Output power / input power at this operating point (datasheet efficiency "
+                                  "curve); the rest heats the part", ("SMPS",)),
+    ("psi_jb", "Ψ_JB [°C/W]", "", "Junction-to-board characterisation parameter from the datasheet's thermal "
+                                  "table: T_j ≈ T_board at the part + P × Ψ_JB. 0 = no junction estimate. "
+                                  "(θ_JA is measured on a JEDEC test board, not yours, so it is not used)",
+     ("LDO", "SMPS")),
+    ("Tj_max", "T_j max [°C]", "", "Junction temperature limit for the warning (often 125 or 150 °C)",
+     ("LDO", "SMPS")),
+)
+
+
+class RegulatorDialog(wx.Dialog):
+    """A regulator between three pads (IN, OUT, GND): a linear regulator (LDO) or a switching
+    regulator as a black box (efficiency).  DC only."""
+    PINS = (("IN", "a", "The input pin (pad): the regulator draws its input current here"),
+            ("OUT", "b", "The output pin (pad): held at the output voltage above GND"),
+            ("GND", "g", "The ground pin (pad): the reference of the output voltage and the return of the input "
+                         "current. A switching regulator built from parts: its ground pin or input cap's ground"))
+
+    def __init__(self, parent, board, el):
+        super().__init__(parent, title="Regulator", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        from ..suite.library import fmt_si
+        self.board, self.result, self.el = board, None, el
+        self.refs = sorted({p.ref for p in board.pads if p.layers}, key=EL.natural_key)
+        self.type = wx.RadioBox(self, label="Type", choices=["Linear regulator (LDO)",
+                                                             "Switching regulator (black box: efficiency)"],
+                                majorDimension=1, style=wx.RA_SPECIFY_COLS)
+        self.type.SetSelection(1 if el.model == "SMPS" else 0)
+        self.type.SetToolTip("Linear: the input current equals the output current (+ I_Q); the drop times the "
+                             "current is its heat. Switching: input power = output power / efficiency, whatever "
+                             "the topology (buck, boost, module)")
+        self.type.Bind(wx.EVT_RADIOBOX, lambda e: self._type())
+        g = wx.FlexGridSizer(0, 2, 6, 8)
+        self.part, self.pad, self.ids = {}, {}, {}
+        first = next((x for x in (el.a, el.b, el.g) if x), "")
+        for pin, attr, tip in self.PINS:
+            pid = getattr(el, attr)
+            ref = (pid or first).rsplit(".", 1)[0] if (pid or first) else (self.refs[0] if self.refs else "")
+            pc = wx.Choice(self, choices=self.refs)
+            if ref in self.refs:
+                pc.SetSelection(self.refs.index(ref))
+            pd = wx.Choice(self, size=(220, -1))
+            pc.Bind(wx.EVT_CHOICE, lambda e, p=pin: self._part(p))
+            pc.SetToolTip(f"The part the {pin} pad belongs to (usually the regulator itself)")
+            pd.SetToolTip(tip)
+            self.part[pin], self.pad[pin] = pc, pd
+            row = wx.BoxSizer(wx.HORIZONTAL)
+            row.AddMany([(pc, 0, wx.RIGHT, 6), (pd, 1)])
+            g.AddMany([(wx.StaticText(self, label=pin), 0, wx.ALIGN_CENTER_VERTICAL), (row, 1, wx.EXPAND)])
+            self._pads(pin, pid)
+        k_in = self.part["IN"].GetSelection()
+        self.name = wx.TextCtrl(self, value=el.name or (self.refs[k_in] if k_in >= 0 else ""))
+        self.name.SetToolTip("A name for the regulator (unique), e.g. U3")
+        g.AddMany([(wx.StaticText(self, label="Name"), 0, wx.ALIGN_CENTER_VERTICAL), (self.name, 1, wx.EXPAND)])
+        self.f = {}
+        new = not el.a
+        vals = dict(Vout=el.Vout or 3.3, Iq=el.Iq, Vf=el.Vf if el.model == "LDO" and not new else 0.3,
+                    R=el.R if el.model == "LDO" else 0.0, eta=(el.eta if el.model == "SMPS" else 0.9) * 100,
+                    psi_jb=el.psi_jb, Tj_max=el.Tj_max)
+        for key, label, unit, tip, models in REG_FIELDS:
+            t = wx.TextCtrl(self, value=fmt_si(vals[key], "").replace(" ", "") if unit else f"{vals[key]:g}")
+            t.SetToolTip(tip)
+            lab = wx.StaticText(self, label=label)
+            self.f[key] = (t, lab, unit, models)
+            g.AddMany([(lab, 0, wx.ALIGN_CENTER_VERTICAL), (t, 1, wx.EXPAND)])
+        g.AddGrowableCol(1)
+        self.heats = wx.CheckBox(self, label="Its loss heats the board (at its pads, shared by pad area)")
+        self.heats.SetValue(el.heats)
+        self.heats.SetToolTip("Ticked: the regulator's loss (V_in I_in − V_out I_out) is a heat source at its "
+                              "pads; the largest pad (the thermal tab) takes most. Untick for an off-board module")
+        top = wx.BoxSizer(wx.VERTICAL)
+        top.Add(self.type, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 10)
+        top.Add(g, 0, wx.EXPAND | wx.ALL, 10)
+        top.Add(self.heats, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        top.Add(wx.StaticText(self, label=(
+            "DC only: it holds OUT − GND at the output voltage and draws its input\n"
+            "current from IN (a linear regulator: the output current; a switching one:\n"
+            "the output power / efficiency / V_in). Feed its input with a voltage source\n"
+            "row and put loads on its output. No regulation loop, soft start, current\n"
+            "limit or thermal shutdown.")), 0, wx.LEFT | wx.RIGHT, 10)
+        top.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 10)
+        self.SetSizerAndFit(top)
+        self._type()
+        self.Bind(wx.EVT_BUTTON, self._ok, id=wx.ID_OK)
+
+    def _model(self):
+        return "SMPS" if self.type.GetSelection() == 1 else "LDO"
+
+    def _type(self):
+        m = self._model()
+        for t, lab, _, models in self.f.values():
+            t.Enable(m in models)
+            lab.Enable(m in models)
+
+    def _part(self, pin):
+        self._pads(pin)
+        if pin == "IN":             # the other pins follow onto the same part while they are unset or alike
+            k = self.part["IN"].GetSelection()
+            for other in ("OUT", "GND"):
+                if self.part[other].GetSelection() != k:
+                    self.part[other].SetSelection(k)
+                    self._pads(other)
+            if k >= 0 and (not self.name.GetValue().strip() or not self.el.name):
+                self.name.SetValue(self.refs[k])
+
+    def _pads(self, pin, sel=None):
+        i = self.part[pin].GetSelection()
+        ref = self.refs[i] if i != wx.NOT_FOUND else ""
+        self.ids[pin] = sorted({p.id for p in self.board.pads if p.ref == ref and p.layers}, key=EL.natural_key)
+        nets = {p.id: p.net for p in self.board.pads}
+        self.pad[pin].Set([f"{pid.rsplit('.', 1)[1]}  ({nets[pid] or 'no net'})" for pid in self.ids[pin]])
+        if self.ids[pin]:
+            k = self.ids[pin].index(sel) if sel in self.ids[pin] else min(("IN", "OUT", "GND").index(pin),
+                                                                             len(self.ids[pin]) - 1)
+            self.pad[pin].SetSelection(k)
+
+    def _ok(self, e):
+        from ..suite.library import parse_si
+        try:
+            a, b, g = (self.ids[p][self.pad[p].GetSelection()] for p in ("IN", "OUT", "GND"))
+        except (IndexError, KeyError, TypeError):
+            return wx.MessageBox("Pick the IN, OUT and GND pads.", "Regulator", parent=self)
+        if len({a, b, g}) < 3:
+            return wx.MessageBox("IN, OUT and GND must be three different pads.", "Regulator", parent=self)
+        m = self._model()
+        v = {}
+        for key, (t, lab, unit, models) in self.f.items():
+            if m not in models:
+                continue
+            txt = t.GetValue().strip().replace(",", ".")
+            if unit and txt.endswith(unit) and unit != "Ω":
+                txt = txt[:-len(unit)]
+            try:
+                v[key] = parse_si(txt.replace("Ω", "")) if txt else 0.0
+            except ValueError:
+                return wx.MessageBox(f"{lab.GetLabel()}: not a number ({t.GetValue()!r}).", "Regulator", parent=self)
+            if v[key] < 0:
+                return wx.MessageBox(f"{lab.GetLabel()} cannot be negative.", "Regulator", parent=self)
+        if v["Vout"] <= 0:
+            return wx.MessageBox("Enter the output voltage.", "Regulator", parent=self)
+        if m == "SMPS" and not 1 <= v["eta"] <= 100:
+            return wx.MessageBox("Efficiency is a percentage between 1 and 100.", "Regulator", parent=self)
+        name = self.name.GetValue().strip() or a.rsplit(".", 1)[0]
+        self.result = EL.Element(name, a, b, v.get("R", 0.0), None, True, False, self.heats.GetValue(), m,
+                                 v.get("Vf", 0.0), g=g, Vout=v["Vout"], Iq=v["Iq"],
+                                 eta=v.get("eta", 90.0) / 100, psi_jb=v["psi_jb"], Tj_max=v["Tj_max"] or 125.0)
+        self.EndModal(wx.ID_OK)
+
+
+class PartHeatDialog(wx.Dialog):
+    """Heat at parts: one line per part, 'REF watts [note]'."""
+
+    def __init__(self, parent, items):
+        super().__init__(parent, title="Heat at parts", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        s = wx.BoxSizer(wx.VERTICAL)
+        s.Add(wx.StaticText(self, label="One part per line: reference, watts, an optional note "
+                                        "(for example  Q1 0.42 switching + conduction).\nThe heat is shared "
+                                        "among the part's pads by area, on its side of the board."), 0, wx.ALL, 8)
+        self.text = wx.TextCtrl(self, style=wx.TE_MULTILINE, size=(460, 200),
+                                value="\n".join(f"{it['ref']} {it['W']:g} {it.get('note', '')}".strip() for it in items))
+        self.text.SetToolTip("Reference designator, power in W, then any note. Empty = no extra heat")
+        s.Add(self.text, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+        s.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
+        self.SetSizerAndFit(s)
+        self.Bind(wx.EVT_BUTTON, self._ok, id=wx.ID_OK)
+        self.items = list(items)
+
+    def _ok(self, e):
+        out = []
+        for k, line in enumerate(self.text.GetValue().splitlines(), 1):
+            f = line.split(None, 2)
+            if not f:
+                continue
+            try:
+                out.append(dict(ref=f[0], W=float(f[1].rstrip("Ww")), note=f[2] if len(f) > 2 else ""))
+            except (IndexError, ValueError):
+                return wx.MessageBox(f"Line {k}: give the reference and the watts ('Q1 0.42').", "Heat at parts",
+                                     parent=self)
+        self.items = out
+        self.EndModal(wx.ID_OK)
+
+
 SETTING_TIPS = {
     "pitch": "Electrical grid cell size in mm, or 'auto' (chosen from the copper size and the cell limit). "
              "Smaller = more accurate and slower",
@@ -340,8 +547,7 @@ class MainFrame(wx.Frame):
         self.probe = CrossProbe(self, self.session)
         self.probe.watch(self.tree, lambda lc: [pref(p) for i in selected_rows(lc) if i < len(self.rows)
                                                 for p in self.rows[i].src + self.rows[i].snk])
-        self.probe.watch(self.etree, lambda lc: [pref(p) for i in selected_rows(lc) if i < len(self.elements)
-                                                 for p in (self.elements[i].a, self.elements[i].b)])
+        self.probe.watch(self.etree, lambda lc: [pref(p) for k in self._esel() for p in self.elements[k].pads()])
         if use_kicad and self.session.kicad is None:
             kp = self.session.connect_kicad()
             board_path = board_path or kp
@@ -425,20 +631,39 @@ class MainFrame(wx.Frame):
         ebox = wx.StaticBoxSizer(wx.VERTICAL, p, "Resistance elements (resistors found on the board, plus "
                                                    "any two pads you add)")
         eb = ebox.GetStaticBox()
-        self.etree = _list(eb, [("On", 40), ("In circuit", 75), ("Name", 80), ("Pad A", 90), ("Pad B", 90),
-                                ("Value", 110), ("Rating [W]", 80), ("Nets", 220), ("Heats board", 85),
-                                ("Source", 60)])
+        frow = wx.BoxSizer(wx.HORIZONTAL)
+        self.efind = wx.SearchCtrl(eb, size=(260, -1))
+        self.efind.ShowCancelButton(True)
+        self.efind.SetDescriptiveText("Find: R12, 10k, VBUS…")
+        self.efind.SetToolTip("Show only the elements whose name, pads, value or nets contain this text (case "
+                              "ignored); several words separated by spaces or commas show any of them, e.g. "
+                              "'R12 R14'")
+        self.efind.Bind(wx.EVT_TEXT, lambda e: self._refresh_elements())
+        self.efind.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, lambda e: self.efind.SetValue(""))
+        self.ecount = wx.StaticText(eb, label="")
+        frow.Add(self.efind, 0, wx.RIGHT, 8)
+        frow.Add(self.ecount, 0, wx.ALIGN_CENTER_VERTICAL)
+        ebox.Add(frow, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
+        self.ecols = ["On", "In circuit", "Name", "Pad A", "Pad B", "Value", "Rating [W]", "Nets", "Heats board",
+                      "Source"]
+        self.etree = _list(eb, [(c, 80) for c in self.ecols])
+        self._erows, self._esort = [], (2, False)          # displayed element indices; sort column, reversed
         self.etree.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._el_edit())
-        self.etree.SetToolTip("Resistances (and diodes) between pads: resistor footprints found on the board "
-                              "and elements you add. Double-click to edit")
+        self.etree.Bind(wx.EVT_LIST_COL_CLICK, lambda e: self._el_sort(e.GetColumn()))
+        self.etree.SetToolTip("Resistances, diodes and regulators between pads: resistor footprints found on "
+                              "the board and elements you add. Click a column title to sort by it (again: "
+                              "reverse); Shift / Ctrl-click to select several; double-click to edit")
         ebox.Add(self.etree, 1, wx.EXPAND | wx.ALL, 4)
         ecol = wx.BoxSizer(wx.HORIZONTAL)
-        self.esel_btn = wx.Button(eb, label="Add from KiCad selection (2 pads)")
+        self.esel_btn = wx.Button(eb, label="From KiCad selection")
+        self.esel_btn.SetToolTip("Selected parts in the PCB editor (e.g. a resistor): select their elements in "
+                                 "this list, ready for On / off or Edit. Two pads selected: add a new element "
+                                 "between them")
         self.esel_btn.Bind(wx.EVT_BUTTON, lambda e: self._el_from_selection())
         self.esel_btn.Disable()
         ecol.Add(self.esel_btn, 0, wx.RIGHT, 12)
-        for text, cmd in (("Add…", self._el_add), ("Edit…", self._el_edit), ("On / off", self._el_toggle),
-                          ("Delete", self._el_delete)):
+        for text, cmd in (("Add…", self._el_add), ("Add regulator…", self._reg_add), ("Edit…", self._el_edit),
+                          ("On / off", self._el_toggle), ("Delete", self._el_delete)):
             b = wx.Button(eb, label=text)
             b.Bind(wx.EVT_BUTTON, lambda e, c=cmd: c())
             ecol.Add(b, 0, wx.RIGHT, 2)
@@ -467,6 +692,14 @@ class MainFrame(wx.Frame):
         self.autor = self.checks["auto_resistors"]
         self.autor.Bind(wx.EVT_CHECKBOX, lambda e: self._refresh_elements())
         left.Add(cg, 0, wx.TOP, 8)
+        hrow = wx.BoxSizer(wx.HORIZONTAL)
+        hb = wx.Button(ss, label="Heat at parts…", style=wx.BU_EXACTFIT)
+        hb.SetToolTip("Watts dissipated in parts (switches, regulators, ...), spread over their pads on the "
+                      "thermal map. The Switching Loop tool can send its switches' losses here")
+        hb.Bind(wx.EVT_BUTTON, lambda e: self._edit_part_heat())
+        self.heat_lbl = wx.StaticText(ss, label="")
+        hrow.AddMany([(hb, 0), (self.heat_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 6)])
+        left.Add(hrow, 0, wx.TOP, 8)
         sbox.Add(left, 0, wx.ALL, 4)
         right = wx.BoxSizer(wx.VERTICAL)
         right.Add(wx.StaticText(ss, label="Copper thickness (double-click to override)"))
@@ -537,17 +770,46 @@ class MainFrame(wx.Frame):
         self._add(S.Row(f"row{len(self.rows) + 1}", [ids[0]], ids[1:], 1.0))
 
     def _el_from_selection(self):
+        """Parts selected in KiCad: select their elements here.  Two pads: add an element between them."""
         if not self.board:
             return
         try:
+            refs = self.kicad.selected_refs()
             ids = self.kicad.selected_pad_ids(self.board)
         except Exception as e:      # noqa: BLE001
             return wx.MessageBox(f"Could not read the selection: {e}", "KiCad", parent=self)
-        if len(ids) != 2:
-            return wx.MessageBox("Select exactly two pads in the PCB editor (the element's two terminals).",
-                                 "KiCad selection", parent=self)
-        ref = ids[0].rsplit(".", 1)[0]
-        self._el_add(EL.Element(ref, ids[0], ids[1], 0.0))
+        if not refs and len(ids) == 2:
+            ref = ids[0].rsplit(".", 1)[0]
+            return self._el_add(EL.Element(ref, ids[0], ids[1], 0.0))
+        refs = refs or list(dict.fromkeys(pid.rsplit(".", 1)[0] for pid in ids))
+        if not refs:
+            return wx.MessageBox("Select parts (e.g. a resistor) in the PCB editor to find their elements here, "
+                                 "or exactly two pads to add an element between them.", "KiCad selection",
+                                 parent=self)
+        self._el_select(refs)
+
+    def _el_select(self, refs):
+        """Select (and show) the elements of these parts: by name, or by the part their pads are on."""
+        want = {r.upper() for r in refs}
+        hit = [k for k, e in enumerate(self.elements)
+               if e.name.upper() in want or {p.rsplit(".", 1)[0].upper() for p in e.pads()} & want]
+        if not hit:
+            return wx.MessageBox(f"No element for {', '.join(refs)}. Resistor footprints are listed when "
+                                 "'Include resistor footprints automatically' is on and their Value reads as a "
+                                 "resistance; for other parts use Add… (or select two pads).", "KiCad selection",
+                                 parent=self)
+        if any(k not in self._erows for k in hit):
+            self.efind.ChangeValue("")      # a filter hiding them would make the selection invisible
+            self._refresh_elements()
+        for i in range(self.etree.GetItemCount()):
+            self.etree.Select(i, self._erows[i] in hit)
+        first = min(self._erows.index(k) for k in hit)
+        self.etree.EnsureVisible(first)
+        self.etree.Focus(first)
+        self.etree.SetFocus()
+        self.ecount.SetLabel(f"Selected {', '.join(self.elements[k].name for k in hit)}: On / off switches "
+                             "them, Edit… changes one.")
+        self.ecount.GetParent().Layout()
 
     # ------------------------------------------------------------- board
     def _browse(self, e):
@@ -623,7 +885,7 @@ class MainFrame(wx.Frame):
             for ids in (r.src, r.snk):
                 ps = self.board.pads_by_id(ids[0]) if self.board and ids else []
                 nets.append(ps[0].net if ps else "?")
-            self.tree.Append([r.name, S.KINDS[r.kind], " + ".join(r.src), " + ".join(r.snk), f"{r.current:g} {r.unit}",
+            self.tree.Append([r.name, S.KINDS[r.kind], " + ".join(r.src), " + ".join(r.snk), fmt_amount(r.current, r.unit),
                               nets[0] if nets[0] == nets[1] else f"{nets[0]} → {nets[1]}"])
         self._refresh_elements()
 
@@ -633,8 +895,19 @@ class MainFrame(wx.Frame):
         auto_on = self.autor.GetValue()
         return [e for e in self.elements if auto_on or not e.auto]
 
+    def _esel(self):
+        """Indices into self.elements of the selected list rows (the list may be sorted / filtered)."""
+        return [self._erows[i] for i in _selected(self.etree) if i < len(self._erows)]
+
+    def _el_sort(self, col):
+        c, rev = self._esort
+        self._esort = (col, not rev if col == c else False)
+        self._refresh_elements()
+
     def _refresh_elements(self):
+        keep = {id(self.elements[k]) for k in self._esel()} if self._erows else set()
         self.etree.DeleteAllItems()
+        self._erows = []
         if not self.board:
             return
         try:
@@ -644,11 +917,33 @@ class MainFrame(wx.Frame):
             used = set()
         nets = {p.id: p.net for p in self.board.pads}
         auto_on = self.autor.GetValue()
-        for e in self.elements:
-            self.etree.Append(["✓" if e.enabled and (auto_on or not e.auto) else "–",
-                               "yes" if id(e) in used else "", e.name, e.a, e.b, e.describe(),
-                               f"{e.P_rated:g}" if e.P_rated else "", f"{nets.get(e.a, '?')} – {nets.get(e.b, '?')}",
-                               "yes" if e.heats else "no (external)", "auto" if e.auto else "user"])
+        texts = [["✓" if e.enabled and (auto_on or not e.auto) else "–",
+                  "yes" if id(e) in used else "", e.name, e.a, e.b + (f", GND {e.g}" if e.regulator else ""),
+                  e.describe(), f"{e.P_rated:g}" if e.P_rated else "",
+                  " – ".join(nets.get(p, "?") for p in e.pads()),
+                  "yes" if e.heats else "no (external)", "auto" if e.auto else "user"] for e in self.elements]
+        words = [w for w in re.split(r"[\s,;]+", self.efind.GetValue().strip().lower()) if w]
+        order = [k for k, t in enumerate(texts)
+                 if not words or any(w in " ".join(t[2:8]).lower() for w in words)]
+        col, rev = self._esort
+        def num(e):                 # Value and Rating sort by their numbers, not their text (10 mΩ < 2.4 Ω)
+            if col == 6:
+                return e.P_rated or 0.0
+            return {"C": e.C, "L": e.L, "LDO": e.Vout, "SMPS": e.Vout}.get(e.model, e.R)
+        if col in (5, 6):
+            order.sort(key=lambda k: (num(self.elements[k]), EL.natural_key(texts[k][2])), reverse=rev)
+        else:
+            order.sort(key=lambda k: EL.natural_key(texts[k][col]), reverse=rev)
+        for k in order:
+            i = self.etree.Append(texts[k])
+            self._erows.append(k)
+            if id(self.elements[k]) in keep:
+                self.etree.Select(i)
+        for c, title in enumerate(self.ecols):
+            info = self.etree.GetColumn(c)
+            info.SetText(title + ((" ▼" if rev else " ▲") if c == col else ""))
+            self.etree.SetColumn(c, info)
+        self.ecount.SetLabel(f"{len(order)} of {len(texts)} shown" if words else f"{len(texts)} element(s)")
 
     def _el_add(self, preset=None):
         if not self.board:
@@ -658,21 +953,30 @@ class MainFrame(wx.Frame):
                 self.elements = [e for e in self.elements if e.name != d.result.name] + [d.result]
                 self._refresh_elements()
 
+    def _reg_add(self):
+        if not self.board:
+            return wx.MessageBox("Load a board first.", "Board", parent=self)
+        with RegulatorDialog(self, self.board, EL.Element("", "", "", 0.0, model="LDO")) as d:
+            if d.ShowModal() == wx.ID_OK and d.result:
+                self.elements = [e for e in self.elements if e.name != d.result.name] + [d.result]
+                self._refresh_elements()
+
     def _el_edit(self):
-        sel = _selected(self.etree)
+        sel = self._esel()
         if sel:
-            with ElementDialog(self, self.board, self.elements[sel[0]]) as d:
+            el = self.elements[sel[0]]
+            with (RegulatorDialog if el.regulator else ElementDialog)(self, self.board, el) as d:
                 if d.ShowModal() == wx.ID_OK and d.result:
                     self.elements[sel[0]] = d.result
                     self._refresh_elements()
 
     def _el_toggle(self):
-        for k in _selected(self.etree):
+        for k in self._esel():
             self.elements[k].enabled = not self.elements[k].enabled
         self._refresh_elements()
 
     def _el_delete(self):
-        sel = _selected(self.etree)
+        sel = self._esel()
         if any(self.elements[k].auto for k in sel):
             wx.MessageBox("Resistors found on the board cannot be deleted; they are switched off instead.",
                           "Elements", parent=self)
@@ -738,7 +1042,19 @@ class MainFrame(wx.Frame):
             self.vars[k].SetValue(f"{getattr(s, k):g}")
         for k, c in self.checks.items():
             c.SetValue(bool(getattr(s, k)))
+        self._heat_label()
         self._refresh_elements()
+
+    def _heat_label(self):
+        items = [it for it in self.settings.part_heat if it.get("W", 0) > 0]
+        self.heat_lbl.SetLabel(", ".join(f"{it['ref']} {it['W']:.3g} W" for it in items)[:90] if items else "none")
+        refit(self.panel)
+
+    def _edit_part_heat(self):
+        with PartHeatDialog(self, self.settings.part_heat) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                self.settings.part_heat = dlg.items
+                self._heat_label()
 
     def _ui_to_settings(self):
         s = self.settings

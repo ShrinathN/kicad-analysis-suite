@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import model as M
-from .analysis import pin_terms, term
+from .analysis import pin_terms, snubber_terms, term
 
 VT = 0.02585            # V, thermal voltage
 GMIN = 1e-9             # S, every node to ground
@@ -445,6 +445,8 @@ class Edge:
     current: float               # A at the edge
     t: np.ndarray = None
     v_sw: np.ndarray = None      # V across the blocking device (die) at the end of the edge
+    v_node: np.ndarray = None    # the switch node against the return (for the EMI spectrum)
+    i_loop: np.ndarray = None    # the hard-switched switch's current
     waves: dict = field(default_factory=dict)       # name -> array
     metrics: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
@@ -608,6 +610,11 @@ def build(board, s, copper, edge, i_l, warnings, vendor=False):
             c.C(mid, T["2"], p_.value * float(cap_factor(p_, 25.0, s.v_rail)))
         elif d.kind == "res":
             c.L(T["1"], T["2"], d.model.get("ls", 0.5e-9), r=d.model.get("r", 0.0))
+    for sn in s.snubbers_on():
+        a, b = snubber_terms(s, sn)
+        mid = f"{sn.label()}#c"
+        c.L(ren(a), mid, sn.esl, r=sn.r)
+        c.C(mid, ren(b), sn.c)
     # inductor current (constant during the edge) and the supply holding the rail
     if copper.get("inductor"):
         lt = ren(copper["inductor"][0])
@@ -623,6 +630,7 @@ def build(board, s, copper, edge, i_l, warnings, vendor=False):
         T = pin_terms(caps[0])
         c.L(ren(T["1"]), "supply#", 200e-9, r=0.05)
         c.V("supply#", ren(T["2"]), lambda t: s.v_rail, 1e-3, "supply")
+    probes["#sw"] = dict(d=lt, s="0", g=None, i=None, pv=1.0, pi=1.0)     # the switch node vs the return
     c.probes = probes
     return c, ctrl, direction
 
@@ -711,7 +719,8 @@ def _simulate(c, t_end, h, sim):
             for key in ("d", "s", "g"):
                 if pr.get(key) and pr[key] != "0":
                     want.add(vec[("v", pr[key])])
-            want.add(vec[("i", pr["i"])])
+            if pr.get("i") is not None:
+                want.add(vec[("i", pr["i"])])
         res = ST.run(text, sorted(want))
         t = res["time"]
         V = lambda name: (np.interp(tu, t, res[vec[("v", name)]]) if name != "0" else np.zeros(len(tu)))   # noqa: E731
@@ -805,10 +814,11 @@ def run(board, s, result, progress=lambda m: None):
         met["I"] = i_l
         met["blocking"] = ctrl.key if kind == "off" else (other.key if other else ctrl.key)
         e = Edge(kind, ctrl.key, other.key if other else "", i_l, t=t, v_sw=vb, waves=waves, metrics=met,
-                 warnings=warnings)
+                 warnings=warnings, v_node=Vf(pr["#sw"]["d"]), i_loop=i_ctrl)
         edges.append(e)
     e_on = next(e for e in edges if e.kind == "on").metrics["E_uJ"]
     e_off = next(e for e in edges if e.kind == "off").metrics["E_uJ"]
+    p_snub = sum(sn.c * s.v_rail ** 2 * s.f_sw for sn in s.snubbers_on())   # C V² per cycle in its R
     summary = dict(direction=s.current_dir(board), simulator=sim, E_on_uJ=e_on, E_off_uJ=e_off,
-                   P_sw_W=(e_on + e_off) * 1e-6 * s.f_sw, f_sw=s.f_sw)
+                   P_sw_W=(e_on + e_off) * 1e-6 * s.f_sw, f_sw=s.f_sw, P_snub_W=p_snub)
     return edges, summary

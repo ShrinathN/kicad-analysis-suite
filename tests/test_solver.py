@@ -504,3 +504,98 @@ def test_parse_diode_element():
     assert (e.model, e.Vf, e.R, e.name) == ("V", 0.45, pytest.approx(0.02), "D1")
     assert parse_element("D1.2-D1.1=0.7v").R == 0.0
     assert parse_element("R1.1-R1.2=4k7").model == "R"
+
+
+def test_heat_at_parts_warms_the_board():
+    """Watts given to a part (Heat at parts) heat its pads; a part not on the board is left out."""
+    b = make_board(seg((0, 0), (20, 0), 1.0, "A") + smd("J", (0, 0), "A") + smd("K", (20, 0), "A")
+                   + smd("Q", (10, 6), "B", size=(2, 2)))
+    s = S.Settings(pitch=0.25, error_estimate=False, magnetic=False, thermal=True)
+    rows = [S.Row("r", ["J.1"], ["K.1"], 0.5)]
+    t0 = max(float(np.nanmax(v)) for v in S.simulate(b, rows, s, progress=lambda m: None).T.values())
+    s.part_heat = [dict(ref="Q", W=0.5), dict(ref="GONE", W=1.0)]
+    r = S.simulate(b, rows, s, progress=lambda m: None)
+    t1 = max(float(np.nanmax(v)) for v in r.T.values())
+    assert t1 > t0 + 10
+    assert any("GONE" in w for w in r.warnings)
+
+
+def regulator_board():
+    """J1 (VIN, GND) -> 1 mm tracks -> U1 (1 IN, 2 GND, 3 OUT, 4 tab GND) -> J2 (VOUT, GND); GND on the back."""
+    return make_board(
+        part("J1", "conn", [("1", (0, 0), "VIN"), ("2", (0, 4), "GND")], lib="t")
+        + part("U1", "LDO", [("1", (10, 0), "VIN"), ("2", (11, 2), "GND"), ("3", (12, 0), "VOUT"),
+                             ("4", (11, 5), "GND")], lib="t", size=(1, 1))
+        + part("J2", "conn", [("1", (22, 0), "VOUT"), ("2", (22, 4), "GND")], lib="t")
+        + seg((0, 0), (10, 0), 1, "VIN") + seg((12, 0), (22, 0), 1, "VOUT")
+        + seg((0, 4), (22, 4), 1, "GND") + seg((11, 2), (11, 5), 1, "GND"))
+
+
+def test_linear_and_switching_regulators():
+    """An LDO holds OUT - GND at its pins and draws I_out + Iq from IN; below dropout its output follows
+    the input; a switching regulator draws P_out / (eta V_in)."""
+    b = regulator_board()
+    ldo = EL.Element("U1", "U1.1", "U1.3", 0.0, model="LDO", Vf=0.3, g="U1.2", Vout=3.3, Iq=1e-3)
+    rows = [S.Row("in", ["J1.1"], ["J1.2"], 5.0, kind="V"), S.Row("load", ["J2.1"], ["J2.2"], 0.5, kind="load")]
+    r = S.simulate(b, rows, cold(0.1), progress=lambda m: None, elements=[ldo])
+    g = r.regulators[0]
+    assert g["V_out_V"] == pytest.approx(3.3, abs=1e-4) and g["I_out_A"] == pytest.approx(0.5, rel=1e-4)
+    assert g["I_in_A"] == pytest.approx(0.501, rel=1e-4) and not g["dropout"]
+    assert r.rows[0]["I_A"] == pytest.approx(0.501, rel=1e-3)          # the source supplies the input current
+    assert g["P_W"] == pytest.approx(g["V_in_V"] * 0.501 - 3.3 * 0.5, rel=1e-6)
+    assert 4.9 < g["V_in_V"] < 5.0                                       # input copper drop
+    # dropout: 3.4 V in, 0.3 V dropout -> the output follows the input
+    rows[0] = S.Row("in", ["J1.1"], ["J1.2"], 3.4, kind="V")
+    r = S.simulate(b, rows, cold(0.1), progress=lambda m: None, elements=[ldo])
+    g = r.regulators[0]
+    assert g["dropout"] and g["V_out_V"] == pytest.approx(g["V_in_V"] - 0.3, abs=1e-3) and g["V_out_V"] < 3.3
+    assert any("dropout" in w for w in r.warnings)
+    # switching: P_in = P_out / eta
+    sw = EL.Element("U1", "U1.1", "U1.3", 0.0, model="SMPS", g="U1.2", Vout=3.3, eta=0.8)
+    rows[0] = S.Row("in", ["J1.1"], ["J1.2"], 12.0, kind="V")
+    r = S.simulate(b, rows, cold(0.1), progress=lambda m: None, elements=[sw])
+    g = r.regulators[0]
+    assert g["I_in_A"] * g["V_in_V"] * 0.8 == pytest.approx(g["V_out_V"] * g["I_out_A"], rel=1e-6)
+    assert g["P_W"] == pytest.approx(0.25 * 3.3 * 0.5, rel=1e-3)
+    # its loss heats its pads; with Ψ_JB the junction estimate sits above the pads
+    ldo.psi_jb = 20.0
+    rows[0] = S.Row("in", ["J1.1"], ["J1.2"], 12.0, kind="V")
+    s = S.Settings(pitch=0.25, error_estimate=False, magnetic=False, thermal=True)
+    r = S.simulate(b, rows, s, progress=lambda m: None, elements=[ldo])
+    g = r.regulators[0]
+    assert g["P_W"] > 4 and g["T_pads_C"] > s.T_amb + 50
+    assert g["T_j_C"] == pytest.approx(g["T_pads_C"] + 20 * g["P_W"])
+
+
+def test_regulator_loop_inductance_is_sane():
+    """The inductance pass switches sources off: a regulator is then a short, not its set voltage."""
+    b = regulator_board()
+    ldo = EL.Element("U1", "U1.1", "U1.3", 0.0, model="LDO", Vf=0.3, g="U1.2", Vout=3.3)
+    rows = [S.Row("in", ["J1.1"], ["J1.2"], 5.0, kind="V"), S.Row("load", ["J2.1"], ["J2.2"], 0.5, kind="load")]
+    r = S.simulate(b, rows, cold(0.1, magnetic=True), progress=lambda m: None, elements=[ldo])
+    L = {(x["row_a"], x["row_b"]): x["L_nH"] for x in r.inductance}
+    assert 1 < L[("load", "load")] < 100           # a ~22 x 4 mm loop: tens of nH
+
+
+def test_row_values_with_prefixes_and_units():
+    from pcb_current_sim.tables import fmt_amount, parse_amount
+    cases = {("1m", "A"): 1e-3, ("1k", "A"): 1e3, ("1u", "A"): 1e-6, ("1M", "V"): 1e6, ("500mA", "A"): 0.5,
+             ("12 V", "V"): 12.0, ("3V3", "V"): 3.3, ("-2m", "A"): -2e-3, ("0.1", "A"): 0.1, ("1 µA", "A"): 1e-6}
+    for (t, u), v in cases.items():
+        assert parse_amount(t, u) == pytest.approx(v, rel=1e-12)
+    for v in (1.23456789, 0.0123456, 3.3, -0.002, 0.0):        # shown and read back without rounding
+        assert parse_amount(fmt_amount(v, "A"), "A") == pytest.approx(v, rel=1e-12, abs=0)
+    for bad in ("abc", "5V", ""):
+        with pytest.raises(ValueError):
+            parse_amount(bad, "A")
+
+
+def test_part_heat_skips_pads_without_copper():
+    """A footprint may hold pads with no copper layer (paste only): heat goes to its copper pads."""
+    paste = ('(footprint "t" (layer "F.Cu") (at 10 6) (property "Reference" "Q")'
+             ' (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net "B"))'
+             ' (pad "" smd rect (at 0 0) (size 1 1) (layers "F.Paste")))')
+    b = make_board(seg((0, 0), (20, 0), 1.0, "A") + smd("J", (0, 0), "A") + smd("K", (20, 0), "A") + paste)
+    assert any(p.ref == "Q" and not p.layers for p in b.pads)
+    heat = S.part_heat(b, [dict(ref="Q", W=1.0)])
+    assert len(heat) == 1 and heat[0][3] == pytest.approx(1.0)

@@ -1,0 +1,1504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PCB Analysis Suite: documentation</title>
+<meta name="description" content="What each tool of the PCB Analysis Suite (KiCad 10 plugin) does, how it works, its limits, and worked use cases.">
+<style>
+:root{
+  --bg:#fbfbf9; --panel:#ffffff; --ink:#1d2329; --ink2:#4b5560; --mute:#78838e; --line:#e3e6e8;
+  --accent:#1f6feb; --accent2:#0b7a5c; --warn:#b26a00; --bad:#c0392b; --code:#f2f4f5; --hl:#fff6d6;
+  --c1:#1f6feb; --c2:#e07b00; --c3:#0b7a5c; --c4:#c0392b; --grid:#e8ebee;
+  --side:280px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14181c; --panel:#1b2026; --ink:#e6e9ec; --ink2:#b7c0c8; --mute:#8a95a0; --line:#2d353d;
+    --accent:#5aa2ff; --accent2:#35c29a; --warn:#e7a33a; --bad:#ff7a6b; --code:#232a31; --hl:#3a3420;
+    --c1:#5aa2ff; --c2:#ffa64d; --c3:#35c29a; --c4:#ff7a6b; --grid:#2a3138;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14181c; --panel:#1b2026; --ink:#e6e9ec; --ink2:#b7c0c8; --mute:#8a95a0; --line:#2d353d;
+  --accent:#5aa2ff; --accent2:#35c29a; --warn:#e7a33a; --bad:#ff7a6b; --code:#232a31; --hl:#3a3420;
+  --c1:#5aa2ff; --c2:#ffa64d; --c3:#35c29a; --c4:#ff7a6b; --grid:#2a3138;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth; scroll-padding-top:16px}
+body{margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;}
+a{color:var(--accent); text-decoration:none} a:hover{text-decoration:underline}
+code,kbd,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; font-size:.9em}
+code{background:var(--code); padding:.08em .35em; border-radius:4px}
+pre{background:var(--code); padding:12px 14px; border-radius:8px; overflow-x:auto; line-height:1.45}
+pre code{background:none; padding:0}
+kbd{border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 .35em; background:var(--panel)}
+h1,h2,h3,h4{line-height:1.25; margin:1.6em 0 .5em}
+h1{font-size:2rem; margin-top:.2em}
+h2{font-size:1.55rem; padding-top:.6em; border-top:1px solid var(--line)}
+h3{font-size:1.2rem}
+h4{font-size:1.02rem; color:var(--ink2)}
+p,ul,ol{margin:.55em 0} li{margin:.2em 0}
+table{border-collapse:collapse; width:100%; margin:.8em 0; font-size:.94em; display:block; overflow-x:auto}
+th,td{border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top}
+th{background:var(--code); font-weight:600}
+img{max-width:100%; height:auto; border:1px solid var(--line); border-radius:6px}
+figure{margin:1em 0} figcaption{font-size:.88em; color:var(--mute); margin-top:.3em}
+.layout{display:flex; min-height:100vh}
+nav.side{width:var(--side); flex:0 0 var(--side); position:sticky; top:0; height:100vh; overflow-y:auto;
+  border-right:1px solid var(--line); background:var(--panel); padding:18px 14px 40px; font-size:.92rem}
+nav.side .brand{font-weight:700; font-size:1.05rem; margin-bottom:2px}
+nav.side .sub{color:var(--mute); font-size:.82rem; margin-bottom:14px}
+nav.side ol{list-style:none; padding:0; margin:0}
+nav.side li{margin:0}
+nav.side a{display:block; padding:3px 8px; border-radius:6px; color:var(--ink2)}
+nav.side a:hover{background:var(--code); text-decoration:none}
+nav.side a.on{background:var(--code); color:var(--accent); font-weight:600}
+nav.side ol ol a{padding-left:20px; font-size:.88rem}
+nav.side .grp{margin-top:12px; font-size:.74rem; letter-spacing:.06em; text-transform:uppercase; color:var(--mute); padding:0 8px}
+main{flex:1; min-width:0; padding:28px 40px 80px; max-width:1020px}
+.topbar{display:none}
+.lead{font-size:1.1rem; color:var(--ink2)}
+.note,.warn,.tip,.limit{border-left:4px solid var(--accent); background:var(--panel); padding:10px 14px; border-radius:0 8px 8px 0; margin:1em 0; border-top:1px solid var(--line); border-right:1px solid var(--line); border-bottom:1px solid var(--line)}
+.warn{border-left-color:var(--warn)} .tip{border-left-color:var(--accent2)} .limit{border-left-color:var(--bad)}
+.note b:first-child,.warn b:first-child,.tip b:first-child,.limit b:first-child{display:block; margin-bottom:2px}
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin:1em 0}
+.card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px}
+.card h4{margin:.1em 0 .3em; color:var(--ink)}
+.card p{font-size:.92em; color:var(--ink2); margin:0}
+.badge{display:inline-block; font-size:.72rem; padding:1px 7px; border-radius:20px; border:1px solid var(--line); color:var(--mute); vertical-align:middle; margin-left:4px}
+.badge.ok{color:var(--accent2); border-color:var(--accent2)}
+.uc{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:4px 18px 12px; margin:1.2em 0}
+.uc h4{color:var(--ink); font-size:1.08rem; margin-top:.9em}
+.uc .who{color:var(--mute); font-size:.9em; margin-top:-.3em}
+.uc dl{margin:.4em 0} .uc dt{font-weight:600; margin-top:.7em} .uc dd{margin:.15em 0 0 0}
+.uc ol{padding-left:1.3em}
+details{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 12px; margin:.8em 0}
+details summary{cursor:pointer; font-weight:600}
+.widget{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin:1.2em 0}
+.widget h4{margin:.1em 0 .6em; color:var(--ink)}
+.controls{display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:8px 16px}
+.controls label{display:block; font-size:.86em; color:var(--ink2)}
+.controls label select,.controls label input{display:block; margin-top:3px}
+.controls label span.v{color:var(--ink); font-weight:600}
+.controls input[type=range]{width:100%}
+.controls select,.controls input[type=number]{font:inherit; padding:3px 6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink)}
+.out{display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:8px; margin:.8em 0}
+.out div{background:var(--code); border-radius:8px; padding:6px 10px; font-size:.88em; color:var(--ink2)}
+.out div b{display:block; font-size:1.15em; color:var(--ink)}
+canvas.plot{width:100%; height:280px; display:block; background:var(--bg); border:1px solid var(--line); border-radius:8px}
+.legend{font-size:.82em; color:var(--ink2); margin-top:4px}
+.legend i{display:inline-block; width:14px; height:3px; vertical-align:middle; margin:0 4px 0 10px}
+svg.flow{width:100%; height:auto; display:block; margin:.8em 0}
+svg.flow text{font:13px system-ui,sans-serif; fill:var(--ink)}
+svg.flow .box{fill:var(--panel); stroke:var(--line); stroke-width:1.5}
+svg.flow .boxa{fill:var(--code); stroke:var(--accent); stroke-width:1.5}
+svg.flow .arr{stroke:var(--mute); stroke-width:1.6; fill:none; marker-end:url(#ah)}
+svg.flow .sm{font-size:11px; fill:var(--ink2)}
+.theme{position:fixed; right:14px; top:12px; z-index:5; font:inherit; font-size:.82rem; padding:4px 10px; border-radius:20px; border:1px solid var(--line); background:var(--panel); color:var(--ink2); cursor:pointer}
+.kv{display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; font-size:.94em}
+.kv b{color:var(--ink2); font-weight:600}
+@media (max-width: 900px){
+  .layout{display:block}
+  nav.side{position:fixed; left:0; top:0; z-index:10; transform:translateX(-105%); transition:transform .2s; height:100vh; box-shadow:0 0 30px rgba(0,0,0,.25)}
+  nav.side.open{transform:none}
+  .topbar{display:flex; position:sticky; top:0; z-index:6; background:var(--panel); border-bottom:1px solid var(--line); padding:8px 16px; align-items:center; gap:10px}
+  .topbar button{font:inherit; border:1px solid var(--line); background:var(--bg); color:var(--ink); border-radius:6px; padding:3px 10px}
+  main{padding:16px 16px 60px}
+  .theme{top:8px}
+  h1{font-size:1.6rem}
+}
+@media print{ nav.side,.topbar,.theme{display:none} main{max-width:none; padding:0} .widget{break-inside:avoid} }
+</style>
+</head>
+<body>
+<button class="theme" id="themeBtn" type="button" aria-label="Switch light or dark theme">◐ Theme</button>
+<div class="topbar"><button type="button" id="menuBtn" aria-label="Open the contents">☰ Contents</button><b>PCB Analysis Suite</b></div>
+<div class="layout">
+<nav class="side" id="side" aria-label="Contents">
+  <div class="brand">PCB Analysis Suite</div>
+  <div class="sub">KiCad 10 plugin · documentation</div>
+  <ol>
+    <li><a href="#start">What it is</a></li>
+    <li><a href="#install">Install and first run</a></li>
+    <li><a href="#concepts">Concepts shared by all tools</a></li>
+    <li class="grp">Tools</li>
+    <li><a href="#dc">DC &amp; Thermal</a>
+      <ol><li><a href="#dc-how">How it works</a></li><li><a href="#dc-use">Using it</a></li><li><a href="#dc-calc">Trace calculator</a></li><li><a href="#dc-limits">Limits</a></li><li><a href="#dc-cases">Use cases</a></li></ol></li>
+    <li><a href="#trace">Trace R/L/C → SPICE</a>
+      <ol><li><a href="#trace-how">How it works</a></li><li><a href="#trace-use">Using it</a></li><li><a href="#trace-calc">Line calculator</a></li><li><a href="#trace-limits">Limits</a></li><li><a href="#trace-cases">Use cases</a></li></ol></li>
+    <li><a href="#loop">Switching Loop</a>
+      <ol><li><a href="#loop-how">How it works</a></li><li><a href="#loop-use">Using it</a></li><li><a href="#loop-ring">Ringing &amp; snubber explorer</a></li><li><a href="#loop-emi">Spectrum explorer</a></li><li><a href="#loop-limits">Limits</a></li><li><a href="#loop-cases">Use cases</a></li></ol></li>
+    <li><a href="#match">Matching &amp; Tolerance</a>
+      <ol><li><a href="#match-how">How it works</a></li><li><a href="#match-use">Using it</a></li><li><a href="#match-mc">Tolerance explorer</a></li><li><a href="#match-limits">Limits</a></li><li><a href="#match-cases">Use cases</a></li></ol></li>
+    <li><a href="#shared">Stackup, library and other panels</a></li>
+    <li class="grp">Reference</li>
+    <li><a href="#choose">Which tool for which question</a></li>
+    <li><a href="#accuracy">Validation and accuracy</a></li>
+    <li><a href="#cli">Command line</a></li>
+    <li><a href="#files">Files and saving</a></li>
+    <li><a href="#trouble">Troubleshooting</a></li>
+    <li><a href="#planned">Planned tools</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ol>
+</nav>
+<main id="top">
+
+<h1 id="start">PCB Analysis Suite</h1>
+<p class="lead">A set of board-level simulation tools that run inside KiCad 10. They read the layout you drew, not a
+schematic, and answer the questions a schematic cannot: how hot this copper gets, how much voltage the planes lose, what
+inductance the hot loop of this converter has, what SPICE model this trace is, and whether this matching network
+survives real part tolerances.</p>
+
+<div class="cards">
+  <div class="card"><h4>DC &amp; Thermal <span class="badge ok">ready</span></h4><p>Current density, IR drop and copper temperature of any nets, with resistors, diodes and loads; short-pulse fusing; magnetic field maps; loop inductance.</p></div>
+  <div class="card"><h4>Trace R/L/C → SPICE <span class="badge ok">ready</span></h4><p>Turns the copper between two or more pads (tracks, vias, pours) into an R-L-C ladder for any SPICE, with Z₀ and delay per segment.</p></div>
+  <div class="card"><h4>Switching Loop <span class="badge ok">ready</span></h4><p>Hot-loop and gate-loop inductance of a buck, boost or half-bridge from its layout, the switching edges in time, a snubber designer, an EMI estimate, before/after comparison.</p></div>
+  <div class="card"><h4>Matching &amp; Tolerance <span class="badge ok">ready</span></h4><p>An RF matching network with real parts: corners, Monte Carlo, worst-case search, yield per band, sensitivity and a BOM.</p></div>
+</div>
+
+<p>All tools run in one window process and share the board, its stackup and a component library. A Home window opens
+them; each saves its setup in a scenario file next to the board, so reopening the board brings everything back.</p>
+
+<div class="note"><b>How to read this page</b>Each tool has the same five parts: <em>how it works</em> (the physics and
+the numerics, so you know what to trust), <em>using it</em> (the window, step by step), an interactive calculator built
+on the same formulas, <em>limits</em> (what it does not model), and <em>use cases</em>: real engineering situations, why
+the tool helps there, and the exact steps. The calculators on this page are simplified one-line models for intuition;
+the tools themselves solve the real layout.</div>
+
+<h2 id="install">Install and first run</h2>
+<ol>
+  <li><b>KiCad 10</b> with its API turned on: <em>Preferences → Plugins → Enable KiCad API</em>. Works with native installs and the Flatpak.</li>
+  <li><b>Install the plugin</b>, one of:
+    <ul>
+      <li><code>kicad_plugin/install.sh</code> copies the plugin into KiCad's plugin folder (run it again after updating the code), or <code>install.sh --link</code> links it to your checkout, so a code update needs only a restart of the PCB editor;</li>
+      <li>a release zip: <code>python3 kicad_plugin/build_pcm.py</code> builds <code>dist/kicad-analysis-suite-&lt;version&gt;.zip</code>; install it with <em>Plugin and Content Manager → Install from File…</em>. Use one method, not both.</li>
+    </ul></li>
+  <li><b>Restart the PCB editor.</b> On the first start KiCad creates the plugin's Python environment and installs numpy, scipy, matplotlib, plotly and kicad-python (needs the network, takes a minute). The GUI uses the wxPython that ships with KiCad.</li>
+  <li>Two toolbar buttons appear: <b>PCB Analysis Suite</b> (opens Home, with every tool) and <b>DC &amp; Thermal</b> (opens that tool directly).</li>
+</ol>
+<div class="warn"><b>Save the board first</b>The tools read the saved <code>.kicad_pcb</code> file, not the editor's memory. Save,
+and refill zones after editing copper (<kbd>B</kbd> in KiCad), before you analyse. DC &amp; Thermal has "Refill zones + save"
+and Switching Loop "Save in KiCad, reload and analyse" buttons that do it through the API.</div>
+<p>Without KiCad: <code>python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code> opens the same suite on a saved board; <code>python3 -m pcb_current_sim</code> and <code>python3 -m pcb_current_sim.extract</code> are command-line front ends (see <a href="#cli">Command line</a>).</p>
+
+<h2 id="concepts">Concepts shared by all tools</h2>
+<h3>The board is read from the file</h3>
+<p>Every tool parses the <code>.kicad_pcb</code> itself: tracks and arcs on every copper layer, vias, filled zones (the
+fill KiCad saved, so refill first), pads of every shape including custom pads and footprint rotation, drill holes (removed
+from the copper), the board outline, and the stackup (copper thickness per layer, dielectric thickness, εr and loss tangent
+per ply). Parts are recognised by reference and Value: <code>R…</code> with a value like <code>4k7</code> or <code>R005</code>
+is a resistor, <code>C…</code> with <code>10u</code> a capacitor, <code>Q…</code>/<code>U…</code> on a switch node a switch.</p>
+<h3>Pads, nets and pins</h3>
+<p>Pads are named <code>REF.NUMBER</code> (<code>U1.3</code>, <code>J2.1</code>). Where a tool needs a part's pin it finds
+it by net, not by pin number: all pads of one part on one net are one pin. A power MOSFET's three source pads are one source
+node, which is right, since the package joins them; the board current into each pad is still solved separately.</p>
+<h3>The return net</h3>
+<p>High-frequency tools (Trace R/L/C, Switching Loop) need to know which copper carries the return current: usually GND.
+At DC the return is just another conductor; at MHz it flows in the copper right under the signal, and the gap between the
+two sets the inductance. This is why the same trace can be 0.4 nH/mm over a solid plane and 1 nH/mm on a two-layer board
+without one.</p>
+<h3>Scenario file</h3>
+<p>Each tool saves its setup in <code>&lt;board&gt;.current_sim.json</code> next to the board, in its own section
+(<code>stackup</code>, <code>dc</code>, <code>extract</code>, <code>loop</code>, <code>matching</code>). A tool rewrites only its
+section. Commit this file with the project if you want colleagues to open the same analyses.</p>
+<h3>Shared panels and KiCad link</h3>
+<ul>
+  <li><b>Stackup &amp; materials</b>: copper thickness overrides (finished outer copper is often 45–60 µm, not 35) and εr/tanδ against frequency. Every tool reads it.</li>
+  <li><b>Component library</b>: real capacitors, inductors and resistors (tolerance, ESR/ESL, SRF, Q, DC-bias derating), used by Matching and Switching Loop.</li>
+  <li><b>Highlight in KiCad</b>: clicking parts in a tool's list selects their footprints in the PCB editor (Suite menu to switch it off). Most tools also take pads from the current KiCad selection.</li>
+  <li><b>Tooltips</b>: every input field in every window explains itself on hover.</li>
+</ul>
+
+<h2 id="dc">DC &amp; Thermal</h2>
+<p class="lead">Feed currents and voltages into the copper of a real layout and see where the current goes, how much
+voltage is lost on the way, which piece of copper gets hot, how long a track survives a short-circuit pulse, and the
+magnetic field the currents make.</p>
+<figure><img src="screenshots/dc_main.png" alt="DC and Thermal main window with excitation rows, elements and settings" loading="lazy">
+<figcaption>The DC &amp; Thermal window: excitation rows (top), resistance elements, settings, copper thickness per layer.</figcaption></figure>
+
+<h3 id="dc-how">How it works</h3>
+<svg class="flow" viewBox="0 0 900 190" role="img" aria-label="DC and Thermal solution flow">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="currentColor" style="color:var(--mute)"/></marker></defs>
+  <rect class="box" x="5" y="30" width="140" height="62" rx="8"/><text x="75" y="56" text-anchor="middle">.kicad_pcb</text><text class="sm" x="75" y="76" text-anchor="middle">tracks, zones, pads, vias</text>
+  <rect class="box" x="180" y="30" width="150" height="62" rx="8"/><text x="255" y="56" text-anchor="middle">Raster per layer</text><text class="sm" x="255" y="76" text-anchor="middle">cut-cell faces, barrels</text>
+  <rect class="boxa" x="365" y="30" width="160" height="62" rx="8"/><text x="445" y="56" text-anchor="middle">Electrical solve</text><text class="sm" x="445" y="76" text-anchor="middle">G·V = I (sparse LU)</text>
+  <rect class="box" x="560" y="30" width="150" height="62" rx="8"/><text x="635" y="56" text-anchor="middle">J, V, losses</text><text class="sm" x="635" y="76" text-anchor="middle">tables, B field, L</text>
+  <rect class="boxa" x="745" y="30" width="150" height="62" rx="8"/><text x="820" y="56" text-anchor="middle">Thermal sheets</text><text class="sm" x="820" y="76" text-anchor="middle">copper + FR4, h(T)</text>
+  <path class="arr" d="M145,61 H178"/><path class="arr" d="M330,61 H363"/><path class="arr" d="M525,61 H558"/><path class="arr" d="M710,61 H743"/>
+  <path class="arr" d="M820,94 V150 H445 V96"/><text class="sm" x="632" y="168" text-anchor="middle">ρ(T) = ρ₂₀(1 + 0.00393(T − 20)): repeat until T stops changing</text>
+</svg>
+<ol>
+  <li><b>Geometry to a grid.</b> Each copper layer of the nets you excite is cut into square cells (pitch chosen
+  automatically, typically 30–100 µm, or set by hand). A link between two cells conducts through the copper part of their
+  shared face (a <em>cut-cell</em> finite-volume scheme, sampled 4×4 per face), so a 45° track and an axis-aligned one of the
+  same width give the same resistance (within 1–2 %). Vias and plated holes are resistors between layers,
+  R = ρL / (π·t·(d + t)) with the plating thickness t. Drill holes are removed.</li>
+  <li><b>Excitations.</b> Every row is applied at the same time: a <em>current path</em> (I in at the source pads, out at the
+  sink pads), a <em>load</em> (draws I between its + and − pads, like an IC or a motor), a <em>voltage source</em> (holds a
+  voltage between its pads, like a regulator; a Norton source with 10⁶ S). Pads on one side of a row are one equipotential;
+  a through-hole pad is fed through its barrel on every layer, an SMD pad over its area.</li>
+  <li><b>Elements.</b> Resistor footprints are found from their Value (<code>4k7</code>, <code>0R1</code>,
+  <code>R005</code>) and become lumped resistors between their pads, so current flows through a shunt or a series resistor
+  into the next net. You can add any two-pad element by hand: a FET's R<sub>DS(on)</sub>, an inductor's DCR, a fuse, an
+  off-board wire, or a diode (constant drop V<sub>f</sub> plus R, conducting one way; the solver iterates the on/off states).</li>
+  <li><b>Regulators.</b> A linear or switching regulator joins three pads (IN, OUT, GND). OUT − GND is held at the output
+  voltage by a stiff source at the regulator's pins; the input current is drawn from IN: the output current plus I<sub>Q</sub>
+  for a linear regulator, P<sub>out</sub>/(η V<sub>in</sub>) for a switching one. Since that current depends on the
+  solution, each solve adds one extra right-hand side per regulator to the same factorisation and settles the input currents
+  on that small system. An LDO whose headroom falls below its dropout becomes a fixed drop instead. Its loss
+  V<sub>in</sub>I<sub>in</sub> − V<sub>out</sub>I<sub>out</sub> heats its pads.</li>
+  <li><b>Solve.</b> Kirchhoff's law at every cell gives a sparse symmetric system, solved directly (SuperLU, or PARDISO if
+  installed). Current density J and the loss density ρJ² follow per cell.</li>
+  <li><b>Heat.</b> Each copper layer is a thermal sheet (all copper of all nets plus its share of the dielectric), the
+  sheets are coupled through the dielectric and through every via barrel, and both outer faces lose heat to the air: natural
+  convection 1.42·(ΔT/L)<sup>0.25</sup> plus radiation, from the local temperature (about 11 W/m²K at a 10 K rise, 18 at 100 K).
+  Element I²R and "Heat at parts" are spread over their pads.</li>
+  <li><b>Electro-thermal loop.</b> Copper resistance rises 0.39 %/K, so hot copper carries current worse and heats more. The
+  tool re-solves with ρ(T) until the temperature changes by less than 0.5 K, and stops with a <em>thermal runaway</em> flag
+  if the copper would melt.</li>
+  <li><b>Extras.</b> A second solve at twice the pitch gives a ± error estimate per row. Biot–Savart from the solved currents
+  gives the magnetic field 1 mm above and below the board. Driving each row alone gives its loop inductance (partial
+  inductance of the DC current pattern, closed by a straight line between its pads).</li>
+  <li><b>Pulse.</b> Optionally a rectangular pulse (all rows × a factor, for a time) is integrated in time with the copper's
+  and the reachable FR4's heat capacity: the hottest point against time and the time to melt.</li>
+</ol>
+
+<h3 id="dc-use">Using it</h3>
+<ol>
+  <li><b>Board.</b> Opens with the board KiCad has open. "Refill zones + save" makes sure the file is current.</li>
+  <li><b>Rows.</b> "Add…" a row (kind, + pads, − pads, amps or volts, a name), or select pads in KiCad (source first, then sink) and "Add from KiCad selection". Use KiCad's selection filter to pick pads, not footprints. Several pads on one side join with <code>+</code>.</li>
+  <li><b>Elements.</b> Check the detected resistors (value, power rating guessed from the package); add elements for FETs, inductors, fuses, diodes, external loads (untick "heats the board" for off-board parts).</li>
+  <li><b>Regulators</b> ("Add regulator…"): linear or switching, its IN / OUT / GND pads, output voltage, I<sub>Q</sub>, the dropout (linear) or efficiency (switching), and Ψ<sub>JB</sub> for a junction estimate. Feed its input with a voltage-source row, put loads on its output.</li>
+  <li><b>Settings.</b> Thermal on, ambient, h from temperature (default) or fixed, copper thickness overrides (finished copper), thermal cell size, error estimate, magnetic maps, pulse, "Heat at parts…".</li>
+  <li><b>Run simulation</b> and read the results window: the map in the middle (layer and quantity in the bar above it: |J|, V, T, power density, |B|, B normal, T at the end of the pulse); the values at the pointer in a large box on the map; click to set a ΔV reference; the sidebar on the left has the exports and the summary and tables (select a table row to mark it on the map). Tabs above the map: 2D map and an interactive 3D view.</li>
+  <li><b>Tables</b>: excitations (ΔV, R<sub>eff</sub>), pads, vias (current, share in parallel groups, IPC capacity), elements (I, V, P against rating, pad temperature), inductance (L, M, k), pulse, and a <em>loss ranking</em> per copper item: power, share, crowding factor, IPC-2221 use and Onderdonk fusing time.</li>
+  <li><b>Export</b>: PNG/SVG/PDF of the view, every layer, a multi-page PDF report, CSV tables, an interactive HTML page, ParaView (VTK) and the result itself (<code>.npz</code>) to reopen later.</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/dc_viewer_current_density.png" alt="Current density map" loading="lazy"><figcaption>|J|: crowding at corners and neck-downs.</figcaption></figure>
+  <figure class="card"><img src="screenshots/dc_viewer_temperature.png" alt="Temperature map" loading="lazy"><figcaption>Temperature with ρ(T) coupling.</figcaption></figure>
+  <figure class="card"><img src="screenshots/dc_viewer_bfield.png" alt="Magnetic field map" loading="lazy"><figcaption>B normal 1 mm above the board.</figcaption></figure>
+  <figure class="card"><img src="screenshots/dc_viewer_3d.png" alt="3D view" loading="lazy"><figcaption>3D view of the layers and vias.</figcaption></figure>
+</div>
+
+<h3 id="dc-calc">Trace calculator (the one-line estimate the tool replaces)</h3>
+<p>For a single straight track the classic estimates are IPC-2221's curve fit for the temperature rise and Onderdonk's
+equation for fusing. The tool lists both per copper item for reference. Try a track here, then read why the layout solve
+differs.</p>
+<div class="widget" id="w-trace">
+  <h4>Straight track: resistance, loss, IPC-2221 rise, fusing time</h4>
+  <div class="controls">
+    <label>Width <span class="v" data-o="tw"></span><input type="range" id="tw" min="0.15" max="10" step="0.05" value="1.5"></label>
+    <label>Length <span class="v" data-o="tl"></span><input type="range" id="tl" min="5" max="300" step="1" value="50"></label>
+    <label>Current <span class="v" data-o="ti"></span><input type="range" id="ti" min="0.1" max="40" step="0.1" value="6"></label>
+    <label>Copper<select id="tc"><option value="17.5">0.5 oz (17.5 µm)</option><option value="35" selected>1 oz (35 µm)</option><option value="48">1 oz + plating (48 µm)</option><option value="70">2 oz (70 µm)</option><option value="105">3 oz (105 µm)</option></select></label>
+    <label>Layer<select id="tlay"><option value="1">outer</option><option value="0">inner</option></select></label>
+    <label>Ambient <span class="v" data-o="ta"></span><input type="range" id="ta" min="0" max="85" step="1" value="25"></label>
+  </div>
+  <div class="out" id="to"></div>
+  <canvas class="plot" id="tplot" aria-label="Temperature rise against current"></canvas>
+  <div class="legend"><i style="background:var(--c1)"></i>IPC-2221 rise against current <i style="background:var(--c4)"></i>this current</div>
+</div>
+<div class="note"><b>Why the tool's answer differs</b>IPC-2221 is a curve fit to old measurements of isolated tracks; it
+knows nothing about the pour next to the track that spreads heat, the neck-down at a connector where the current crowds,
+the via field that carries heat to the other side, the warm resistor 3 mm away, or the copper of other nets that conducts
+heat but no current. The solve includes all of these. It typically reads lower than IPC-2221 for a track inside a board
+full of copper and higher at constrictions. IPC-2152 (2009) replaced 2221's chart with board-dependent charts for the same
+reasons.</div>
+
+<h3 id="dc-limits">Limits</h3>
+<div class="limit"><b>What DC &amp; Thermal does not model</b>
+<ul>
+  <li><b>DC only.</b> No skin effect, no AC current redistribution. For a switching converter's ripple current, the DC map shows where the average current flows, not where the 1 MHz ripple returns (use Switching Loop for that).</li>
+  <li><b>2.5D heat.</b> Each layer is a sheet; heat flow through the thickness is lumped. Component bodies, their junction-to-case resistance, enclosures, forced airflow and nearby hot boards are not modelled. "Heat at parts" puts a part's watts on its pads: it gives the board temperature under the part, not the junction temperature.</li>
+  <li><b>Regulators are DC black boxes.</b> Output held at its pins, input current from the power balance; no regulation loop, soft start, current limit or thermal shutdown, and the efficiency is one number (take it from the datasheet curve at your load). The junction estimate uses Ψ<sub>JB</sub> with the solved board temperature.</li>
+  <li><b>Isolated board in still air.</b> Both faces see ambient. A board bolted to a chassis or in a closed box runs cooler or hotter; adjust h by hand ("h from temperature" off) to represent it.</li>
+  <li><b>Current excitations are ideal.</b> A current row pushes its amps whatever the resistance; use voltage sources and loads where the supply and the load decide the current. Two loops excited by separate current rows have no defined voltage between them, so an element bridging them carries no current.</li>
+  <li><b>Resistors</b> have no temperature coefficient; Kelvin (4-terminal) shunts need their pads chosen by hand.</li>
+  <li><b>Loop inductance</b> uses the DC current pattern: at MHz the return current hugs its track and the real L is somewhat lower.</li>
+  <li><b>Pulse</b>: rectangular only, the solder and the parts' heat capacity are ignored (errs hot).</li>
+</ul></div>
+
+<h3 id="dc-cases">Use cases</h3>
+
+<div class="uc" id="uc-dc-motor">
+<h4>1. A 15 A motor-driver feed on a two-layer board</h4>
+<p class="who">Hardware engineer, brushed-DC motor controller, 12 V, 2-layer 1 oz FR4, no fan.</p>
+<dl>
+<dt>Situation</dt><dd>The supply enters through a screw terminal J1, runs 60 mm to the H-bridge FETs, and has to squeeze to
+1.8 mm between two mounting holes. IPC-2221 gives a 1.8 mm 1 oz outer track a rise of over 200 K at 15 A (try it in the
+<a href="#dc-calc">calculator</a>), and the board sits next to the motor at 50 °C. Is it really that bad, and is widening the neck enough or does it need copper on
+the bottom too?</dd>
+<dt>Why this tool</dt><dd>The answer depends on what the calculator ignores: the pours on either side of the neck, the GND
+return running under it on the bottom layer (which conducts heat too), the FETs' own losses, and that the narrow part is only
+4 mm long. The solve sees all of it and also shows whether the current crowds at the terminal pads.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Save and refill zones in KiCad, open DC &amp; Thermal.</li>
+  <li>Add a <em>current path</em> row "VM": source <code>J1.1</code>, sink the high-side FET drains (select their drain pads in KiCad, "Add from KiCad selection"), 15 A. Add a second row "GND return" from the low-side sources back to <code>J1.2</code>, 15 A, so both copper paths carry the current at once.</li>
+  <li>If the motor current sense resistor is on the board it is detected automatically; check its value and rating in the Elements list.</li>
+  <li>Settings: ambient 50 °C, thermal on, h from temperature. Add the FETs' conduction loss under "Heat at parts…" (for example <code>Q1 0.6</code>, <code>Q2 0.6</code>) or take them from the Switching Loop tool.</li>
+  <li>Run. Look at T on F.Cu, then the loss ranking table: the neck should be at the top with its crowding factor and IPC use.</li>
+  <li>Try the fix in KiCad (widen, or add a bottom-layer copper strip under the neck with a row of vias at each end), "Refill zones + save", run again, compare T<sub>max</sub> and the row's ΔV.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>T<sub>max</sub> and where it is; whether the hot spot is the neck or the terminal pads (screw terminals often run hotter than the track because current enters through a small barrel); the ΔV of each row (motor voltage lost on the board); the via table if you add the bottom strip: whether the vias share the current or the first one carries most.</dd>
+<dt>Caveat</dt><dd>The screw terminal's own contact resistance and the wire are not on the board: add them as an element with "heats the board" off if you want their drop in ΔV.</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-shunt">
+<h4>2. A current-sense shunt that reads wrong and runs hot</h4>
+<p class="who">BMS / power-supply designer, 2512 5 mΩ shunt, 20 A continuous.</p>
+<dl>
+<dt>Situation</dt><dd>The shunt dissipates I²R = 2 W. Prototypes read 3 % high, and the shunt's pads are close to 110 °C.
+Two questions: where must the sense traces leave the pads (Kelvin taps), and how much copper does the shunt need to stay
+under the 2512 part's derating point?</dd>
+<dt>Why this tool</dt><dd>With 5 mΩ, 1 mΩ of pad and solder copper in the measured path is a 20 % error source; the error
+depends on exactly where on the pad the sense trace leaves. The tool solves the voltage across the pads themselves (the
+voltage map shows the gradient inside each pad), and it heats the pads with the shunt's I²R, spread over their area.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Add a <em>current path</em> row from the battery connector pads to the load connector pads, 20 A. The shunt (for example <code>R1</code>, Value <code>R005</code> or <code>5m</code>) is detected and the path runs through it.</li>
+  <li>Run with thermal on. Read the shunt's row in the Elements table: I, P = 2 W, rating use (2512 ≈ 1 W guessed: it will be flagged; correct the rating to the datasheet's 3 W) and pad temperature.</li>
+  <li>Switch the viewer to V on the shunt's layer. Click one sense pad's tap point to set the ΔV reference, hover the other tap: that is what the ADC sees. Compare with 20 A × 5 mΩ = 100 mV.</li>
+  <li>Move the taps in KiCad to where the readout equals 100 mV (usually the inner edge of the pads), and enlarge the pours to bring the pad temperature down; run again.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>ΔV between the actual tap points vs. the ideal 100 mV; pad temperature vs. the shunt's derating curve (most 2512 metal shunts derate from 70–100 °C terminal temperature).</dd>
+<dt>Caveat</dt><dd>The shunt is a lumped resistor between its pad electrodes: current spreading inside the resistor body and its TCR are not modelled. The tap error from the copper is what the tool gives you.</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-core">
+<h4>3. IR drop on an FPGA core rail</h4>
+<p class="who">Digital board designer, 0.85 V core rail, 12 A, ±3 % tolerance at the balls, 8-layer board.</p>
+<dl>
+<dt>Situation</dt><dd>The point-of-load regulator sits 35 mm from the FPGA (the area under it is full). The rail runs in an
+inner plane perforated by the BGA's via field. The FPGA allows ±25 mV in total, regulator tolerance included. How much does
+the plane eat, and is remote sense needed?</dd>
+<dt>Why this tool</dt><dd>A perforated plane under a BGA has an effective resistance far above its sheet value: the
+anti-pads around every via cut it into narrow webs. Only a field solve of the real geometry gives the drop; the voltage map
+also shows which balls see the lowest voltage.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Add a <em>voltage source</em> row at the regulator's output capacitor pads (+ on VCCINT, − on GND), 0.85 V.</li>
+  <li>Add a <em>load</em> row: + the FPGA's VCCINT balls (select them in KiCad with the selection filter set to pads), − its GND balls, 12 A.</li>
+  <li>Thermal can stay on (the loss is small); turn on the error estimate.</li>
+  <li>Run. The load row shows the voltage the FPGA actually gets. On the plane's layer, the V map shows the drop pattern; hover the worst ball.</li>
+  <li>Try more vias from the regulator to the plane, a second plane layer in parallel, or the sense point moved to the BGA; compare.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>The load row's voltage against 0.85 V − 25 mV, with the error estimate's ± band; vias near the regulator carrying most of the current in the via table.</dd>
+<dt>Caveat</dt><dd>This is the DC part of the budget. The transient part (load steps, decoupling) is an AC question for the planned PDN tool.</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-pulse">
+<h4>4. Will a track survive the short-circuit current until the protection trips?</h4>
+<p class="who">Battery-pack designer, 4S Li-ion, protection MOSFETs opening after 200 µs to 5 ms depending on the fault.</p>
+<dl>
+<dt>Situation</dt><dd>A hard short can draw 150 A from the cells for the protection IC's delay, up to 5 ms in its slowest
+setting. The pack board has a 3 mm, 2 oz track from the cell tab to the FETs. Will it fuse, or get hot enough to delaminate,
+before the FETs open?</dd>
+<dt>Why this tool</dt><dd>Onderdonk's equation assumes a bare wire with no heat escaping. On a board the FR4 under the
+track soaks up heat within milliseconds, and pads and pours at its ends add copper. The pulse simulation includes both and
+gives the hottest point against time.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Add the current path row (cell tab pad → FET drains) at the normal current, say 20 A, and the return row.</li>
+  <li>Settings: Pulse on, amplitude 7.5 × (= 150 A), length 5 ms, "from steady state" on (the board is warm from the 20 A when the short happens).</li>
+  <li>Run. The pulse table gives the peak temperature over time and the time to melt if it melts; the viewer's "T at end of pulse" shows where.</li>
+  <li>Compare with the loss ranking's Onderdonk column (bare-wire fusing time at the row current) and the protection delay.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>Peak copper temperature at 5 ms. Copper does not need to melt to fail: above about 200–250 °C solder joints reflow and FR4 starts to delaminate, so keep a margin well below 1083 °C.</dd>
+<dt>Caveat</dt><dd>The cells' internal resistance and the FETs set the real short current; enter what your protection design expects. The parts' and solder's heat capacity is not included (errs hot).</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-mag">
+<h4>5. A magnetometer next to a power track</h4>
+<p class="who">Drone flight-controller designer, 3-axis magnetometer, 25 A ESC feed on the same board.</p>
+<dl>
+<dt>Situation</dt><dd>The compass heading drifts with throttle. The battery feed passes 8 mm from the magnetometer. The
+Earth's field is about 50 µT, and a 1° heading error is about 1 µT of disturbance in the horizontal plane.</dd>
+<dt>Why this tool</dt><dd>The field depends on where the current and its return flow, on every layer. The tool computes B
+from the solved currents (Biot–Savart), so it shows the field at the sensor for the real routing, and how much routing the
+return directly under the feed cancels it.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Add the feed and its return as current rows at 25 A (or the hover current).</li>
+  <li>Settings: Magnetic on, "B-map distance" = the height of the sensor's die above the top surface (about 0.5–1 mm).</li>
+  <li>Run, choose |B| or B normal on the top view, hover the magnetometer's position: Bx, By, Bz in the readout.</li>
+  <li>Reroute the return directly beneath the feed (or twist the pair as close tracks), run again and compare the field at the sensor.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>The horizontal components at the sensor in µT, against your heading-error budget (about 1 µT per degree). A field that scales with throttle cannot be calibrated out by a hard-iron calibration.</dd>
+<dt>Caveat</dt><dd>Only the board's currents: the battery leads and motor wires are often the bigger source, and they are off the board.</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-vias">
+<h4>6. How many vias for a layer change at 10 A?</h4>
+<p class="who">Any power layout that changes layer: an LED driver's output, a converter's input.</p>
+<dl>
+<dt>Situation</dt><dd>A rule of thumb says 1 A per 0.3 mm via. Ten vias in a 2×5 grid should do for 10 A. But the current
+enters from one side: do the far vias do anything?</dd>
+<dt>Why this tool</dt><dd>The via table lists each via's current and its share of its parallel group. Vias on the side the
+current comes from carry more, because the path through the far ones is longer in copper.</dd>
+<dt>Steps</dt><dd>Add the current path across the transition; run; open the via table and sort by current; look at the share column and the IPC capacity per via. Try a staggered pattern or a wider entry, compare.</dd>
+<dt>What to look for</dt><dd>The hottest via's current against its capacity, and whether moving vias to the entry side is better than adding more.</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-fet">
+<h4>7. How much copper does a SMD power MOSFET need?</h4>
+<p class="who">Power designer, D2PAK / PowerPAK FETs without heatsink, 1.5 W each.</p>
+<dl>
+<dt>Situation</dt><dd>The FET datasheet's R<sub>θJA</sub> is measured on a 1 in² 2 oz pad. Your layout has less copper, but
+has thermal vias to an inner GND plane. What is the board temperature under the tab?</dd>
+<dt>Why this tool</dt><dd>The board's spreading resistance is the dominant part of R<sub>θJA</sub> for SMD power parts, and
+it depends on the copper around, the vias and the planes: what the thermal model solves.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Add the FETs' load path as rows (their I²R in the copper is included) or, if only the heat matters, a small row so the nets are simulated.</li>
+  <li>"Heat at parts…": <code>Q1 1.5 conduction + switching</code> (or "Send losses to DC &amp; Thermal" from Switching Loop).</li>
+  <li>Run; T on the FET's layer and the pad temperature. Add thermal vias / copper; compare.</li>
+  <li>Junction temperature ≈ the pad temperature + P × R<sub>θJC</sub> from the datasheet.</li>
+</ol></dd>
+<dt>Caveat</dt><dd>The heat enters through the pads; the part's own body and its junction-to-case resistance are not modelled.</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-ldo">
+<h4>8. Can the LDO take it, or does it need to be a switcher?</h4>
+<p class="who">Embedded designer, 12 V input, a 3.3 V LDO in SOT-223 feeding an MCU (80 mA) and a radio (70 mA average).</p>
+<dl>
+<dt>Situation</dt><dd>The LDO drops 8.7 V at 150 mA: about 1.3 W in a small package. The datasheet's θ<sub>JA</sub> of
+60 °C/W says the junction would sit 80 K above ambient, but that figure is for a JEDEC test board, not this one, which has a
+modest pour on the tab and a GND plane below. Is the copper enough, or should it be a buck converter?</dd>
+<dt>Why this tool</dt><dd>The regulator's loss follows from the voltages and currents the board actually delivers, its heat
+goes into the real copper around its tab, and Ψ<sub>JB</sub> turns the solved board temperature into a junction estimate.
+Swapping it for a switching regulator is one click.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Rows: a voltage source, 12 V, at the input connector; loads on the 3.3 V net at the MCU's and the radio's supply pins (0.08 A and 0.07 A).</li>
+  <li>"Add regulator…": linear, IN / OUT / GND = the LDO's pins, 3.3 V, I<sub>Q</sub> from the datasheet, its dropout at 150 mA, Ψ<sub>JB</sub> from its thermal table, T<sub>j</sub> max 125 °C.</li>
+  <li>Settings: ambient at the product's worst case (for example 50 °C), thermal on. Run.</li>
+  <li>Regulators tab: P, the pad temperature and T<sub>j</sub>. Enlarge the tab's pour or add thermal vias to the plane in KiCad, reload, run again.</li>
+  <li>Edit the regulator to "switching" with the efficiency from a candidate buck's datasheet curve at 150 mA (say 85 %): its loss falls to about 0.09 W, and the 12 V row's current shows the lower input current.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>T<sub>j</sub> against the limit with margin for tolerance; how much each change of copper buys;
+the headroom column when the input comes over a long cable or through a protection diode (a 5 V input to a 3.3 V LDO with
+1 V dropout leaves little).</dd>
+<dt>Caveat</dt><dd>Ψ<sub>JB</sub> assumes most of the heat leaves through the board, which holds for SMD packages without a
+heatsink. The efficiency is one number at one load.</dd>
+</dl></div>
+
+<div class="uc" id="uc-dc-tree">
+<h4>9. A battery-powered rail: what voltage does the IC really get?</h4>
+<p class="who">Designer of a small battery device: a 3 V battery, reverse-polarity protection FETs, a fuse, a 1.8 V LDO and a sensor IC.</p>
+<dl>
+<dt>Situation</dt><dd>The supply runs battery → two protection FETs → a resettable fuse → the LDO → the IC's 1.8 V pins.
+Each part takes a little voltage, and a battery near the end of its life has little to spare. Will the LDO keep regulating,
+and what does the IC see at its pins?</dd>
+<dt>Why this tool</dt><dd>It adds up the drops in the copper and in every part along the way, then the LDO regenerates
+1.8 V at its own pins, and the copper from there to the IC takes its share. The LDO's input current comes out of the
+solution by itself.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Elements: each protection FET as a resistance between its drain and source pads (its R<sub>DS(on)</sub>), the fuse as a resistance (its datasheet resistance).</li>
+  <li>"Add regulator…": linear, the LDO's IN, OUT and GND pads, 1.8 V, its I<sub>Q</sub> and dropout.</li>
+  <li>Rows: a <em>voltage source</em> on the battery's + and − pads (its voltage), and a <em>load</em> from the IC's 1.8 V pins to its ground pins (its current). Select the pads in KiCad and use "Add from KiCad selection"; if the sides come out reversed, "⇄ Swap source and sink".</li>
+  <li>Run. Read the Regulators tab (V<sub>in</sub>, headroom, dropout) and the load row's voltage.</li>
+  <li>Lower the battery's voltage to its end-of-life value and run again.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>For example at 3.0 V and 0.1 A, with a 1 Ω fuse and two 60 mΩ FETs, the LDO's input sits near
+2.89 V: 1.09 V of headroom and 0.11 W in the LDO. The headroom column says how far the battery can sag before the LDO
+drops out; the load row shows the voltage at the IC's pins, a few mV under 1.8 V.</dd>
+<dt>Caveat</dt><dd>Do not use a <em>current path</em> row from the battery to the IC: a regulator does not conduct from
+IN to OUT (it makes its own output voltage), so the two sides are separate circuits and the run stops with an error that
+names the regulator. A voltage source plus loads is the right description.</dd>
+</dl></div>
+
+<h2 id="trace">Trace R/L/C → SPICE</h2>
+<p class="lead">Pick two or more pads; get the copper between them (tracks, vias, pads, copper pours, and parts you place
+between pads) as a plain R-L-C subcircuit that any SPICE simulator runs, plus Z₀, delay and parasitics per segment.</p>
+<figure><img src="screenshots/extract_schematic.png" alt="Trace tool schematic tab showing the extracted ladder" loading="lazy">
+<figcaption>Schematic tab: the extracted model from P1 to P2, with a pour drawn as one box and an inductor element.</figcaption></figure>
+
+<h3 id="trace-how">How it works</h3>
+<svg class="flow" viewBox="0 0 900 150" role="img" aria-label="Trace extraction flow">
+  <rect class="box" x="5" y="30" width="150" height="62" rx="8"/><text x="80" y="56" text-anchor="middle">Ports + elements</text><text class="sm" x="80" y="76" text-anchor="middle">pads P1, P2, …; R/C/L/D</text>
+  <rect class="box" x="185" y="30" width="150" height="62" rx="8"/><text x="260" y="56" text-anchor="middle">Copper graph</text><text class="sm" x="260" y="76" text-anchor="middle">tracks, vias, pads, pours</text>
+  <rect class="boxa" x="365" y="30" width="170" height="62" rx="8"/><text x="450" y="52" text-anchor="middle">2D field solves</text><text class="sm" x="450" y="70" text-anchor="middle">cross-section every mm</text><text class="sm" x="450" y="85" text-anchor="middle">pours: mesh + Kron</text>
+  <rect class="box" x="565" y="30" width="150" height="62" rx="8"/><text x="640" y="56" text-anchor="middle">π-ladder</text><text class="sm" x="640" y="76" text-anchor="middle">sections ≤ λ/10</text>
+  <rect class="box" x="745" y="30" width="150" height="62" rx="8"/><text x="820" y="56" text-anchor="middle">.subckt</text><text class="sm" x="820" y="76" text-anchor="middle">P1 P2 … REF</text>
+  <path class="arr" d="M155,61 H183"/><path class="arr" d="M335,61 H363"/><path class="arr" d="M535,61 H563"/><path class="arr" d="M715,61 H743"/>
+</svg>
+<ol>
+  <li><b>Trace the copper</b> from port P1: straight track pieces (arcs as short segments), T-junctions, touching or
+  overlapping copper (a via ring on a pad edge, a track ending on a pad), vias as one node per layer with barrel pieces
+  between them, pads as nodes. Nets are followed through the <em>elements</em> you place (a resistor, an inductor, a diode),
+  never into a return net: a pad on GND is the reference node REF. With "Include stubs" branches to other pads stay in the
+  model as open stubs (they ring); otherwise only the paths between the ports are kept.</li>
+  <li><b>Cross-sections.</b> Every <em>sample</em> mm along a track, the tool cuts the board perpendicular to it within a
+  window and finds the return copper (zones and tracks of the return nets on every layer). A 2D finite-volume solve of that
+  cross-section with the stackup's dielectrics gives the capacitance per length C′; the same solve in air gives
+  L′ = 1/(c²C₀′). Z₀ = √(L′/C′), delay = √(L′C′) per length. Identical cross-sections are solved once.</li>
+  <li><b>Resistance.</b> R′ = ρ/(w·t) per track piece, then (optionally) scaled so the whole path's DC resistance matches the
+  DC &amp; Thermal solver's (which sees pads and current crowding). R′ at f max with skin effect is reported per segment.</li>
+  <li><b>Vias and pads.</b> A via is its barrel R; L from the nearest return via (a two-wire line) or the partial inductance
+  of an isolated via; C from its anti-pad in the return planes. SMD pads add C′ × length, through-hole pads a via-like C.</li>
+  <li><b>Pours.</b> A zone of the net is meshed (down to 0.05 mm, up to 60 000 cells). Each cell link has the conductance of
+  its copper and the inductance of copper over its return, μ₀h per square; each cell has C = ε₀ε<sub>r</sub>A/h to the
+  return. The mesh is reduced exactly onto the pads and vias that touch the pour (Kron reduction), giving an R + L branch
+  between every pair of them and their share of the C. A port or element pad is one terminal over its whole area; other pads
+  in the pour are tapped near their centre (otherwise a big through-hole pad would be a free shortcut across the pour).</li>
+  <li><b>Ladder.</b> Each chain of track between junctions is cut into equal sections no longer than λ/10 at f max: series
+  R + L, C/2 to REF at each end. Optional dielectric loss G = ωC·tanδ as shunt resistors.</li>
+  <li><b>Output.</b> <code>.subckt NAME P1 P2 … REF</code> with plain R, L and C (a diode element becomes a source, a
+  near-ideal diode and its R). Node and element names tell where they come from: <code>L1_2</code> is the node at pad L1.2,
+  <code>R_trk3_2</code> section 2 of track chain 3, <code>R_via12</code> a via, <code>R_pour1_A_B</code> the pour branch
+  between nodes A and B, <code>C_&lt;node&gt;</code> capacitance to REF.</li>
+</ol>
+
+<h3 id="trace-use">Using it</h3>
+<ol>
+  <li><b>Ports</b>: "Add pad…" or "From KiCad selection". P1 is the reference end; totals are from P1 to each other port.
+  Every pad you want to drive, load or probe in SPICE must be a port; other pads stay inside the model.</li>
+  <li><b>Return nets</b>: GND-like nets are ticked. Also tick a power plane that is decoupled to ground at the frequencies of
+  interest if signals reference it.</li>
+  <li><b>Elements</b> (optional): any two pads joined by R, a diode (V<sub>f</sub> + R), C or L, ideal. A decap from the signal
+  to a GND pad is a shunt C to REF.</li>
+  <li><b>Options</b>: f max (sets the section length and the εr used; enter the rise time and it suggests 0.35/t<sub>r</sub>),
+  sample step and window, include stubs, calibrate R, dielectric loss.</li>
+  <li><b>Extract</b>, then read the tabs: <em>Summary</em> (per path R, L, C, Z₀ range, delay, warnings), <em>Segments</em>
+  (per piece: layer, width, Z₀, ε<sub>eff</sub>, L′, C′, R′, return found; vias, pads, pours, elements; CSV),
+  <em>Board</em> (path coloured by Z₀, steps &gt; 10 % marked, "Select path in KiCad"), <em>SPICE</em> (save / copy),
+  <em>Schematic</em> (the ladder drawn along the path of least resistance).</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/extract_summary.png" alt="Summary tab" loading="lazy"><figcaption>Summary.</figcaption></figure>
+  <figure class="card"><img src="screenshots/extract_board.png" alt="Board tab" loading="lazy"><figcaption>Board: path by Z₀.</figcaption></figure>
+  <figure class="card"><img src="screenshots/extract_segments.png" alt="Segments tab" loading="lazy"><figcaption>Segments.</figcaption></figure>
+  <figure class="card"><img src="screenshots/extract_spice.png" alt="SPICE tab" loading="lazy"><figcaption>SPICE netlist.</figcaption></figure>
+</div>
+<div class="tip"><b>Ports, in short</b>A port is a pad that becomes a pin of the subcircuit (P1, P2, …), always measured against REF.
+Ports have no direction: drive any of them. Two ports on the same copper node are rejected; a port cannot be on a return net
+(that pad <em>is</em> REF). A port pad is an equipotential over its whole area, so pick the pads where the outside circuit
+really connects.</div>
+
+<h3 id="trace-calc">Line calculator</h3>
+<p>For one microstrip over a plane, the closed forms (Hammerstad–Jensen, zero thickness) give what the tool's field solve
+gives per cross-section, within about 2 %. The section count is how many π sections the ladder needs to stay valid up to
+f max.</p>
+<div class="widget" id="w-line">
+  <h4>Microstrip: Z₀, delay, L′, C′ and ladder sections</h4>
+  <div class="controls">
+    <label>Width w <span class="v" data-o="lw"></span><input type="range" id="lw" min="0.08" max="5" step="0.01" value="0.3"></label>
+    <label>Dielectric h <span class="v" data-o="lh"></span><input type="range" id="lh" min="0.05" max="1.6" step="0.005" value="0.2"></label>
+    <label>ε<sub>r</sub> <span class="v" data-o="le"></span><input type="range" id="le" min="2" max="10" step="0.05" value="4.3"></label>
+    <label>Length <span class="v" data-o="ll"></span><input type="range" id="ll" min="2" max="300" step="1" value="60"></label>
+    <label>f max <span class="v" data-o="lf"></span><input type="range" id="lf" min="7" max="10" step="0.01" value="9"></label>
+    <label>Copper<select id="lt"><option value="17.5">0.5 oz</option><option value="35" selected>1 oz</option><option value="70">2 oz</option></select></label>
+  </div>
+  <div class="out" id="lo"></div>
+  <canvas class="plot" id="lplot" aria-label="Characteristic impedance against width"></canvas>
+  <div class="legend"><i style="background:var(--c1)"></i>Z₀ against width at this h and ε<sub>r</sub> <i style="background:var(--c4)"></i>this width <i style="background:var(--c3)"></i>50 Ω</div>
+</div>
+
+<h3 id="trace-limits">Limits</h3>
+<div class="limit"><b>What Trace R/L/C does not model</b>
+<ul>
+  <li><b>Quasi-static.</b> No radiation, no dispersion: fine while the cross-section is much smaller than a wavelength (into the low GHz on ordinary boards).</li>
+  <li><b>One net at a time.</b> No coupling to neighbouring signals (crosstalk, mutual L and C) yet.</li>
+  <li><b>R is DC in the netlist.</b> Skin-effect loss is reported per segment at f max but not built into the time-domain model.</li>
+  <li><b>The return is an ideal reference.</b> Return copper is found and sets L and C, but its own resistance and inductance (ground bounce, return current detours around plane splits) are not in the netlist. Without return copper in the window, L is the trace's partial inductance and C ≈ 0 (marked red on the board view).</li>
+  <li><b>Solder mask</b> is not modelled (outer-layer Z₀ reads 1–3 % high).</li>
+  <li><b>Elements are ideal</b> R, C, L, diode: add ESR, ESL or a cap's own model in your SPICE deck if they matter.</li>
+  <li><b>Pours are lumped</b>: a pour larger than λ/10 at f max is warned about, with the frequency up to which its model holds.</li>
+</ul></div>
+
+<h3 id="trace-cases">Use cases</h3>
+
+<div class="uc">
+<h4>1. Crystal load capacitance: how much does the copper add?</h4>
+<p class="who">Any MCU board with a 32.768 kHz or 8–25 MHz crystal.</p>
+<dl>
+<dt>Situation</dt><dd>The crystal's datasheet asks for C<sub>L</sub> = 9 pF. The usual formula
+C<sub>L</sub> = C1·C2/(C1 + C2) + C<sub>stray</sub> needs C<sub>stray</sub>, normally guessed as "2–5 pF". A wrong guess
+pulls the frequency by tens of ppm: an RTC that drifts a minute a month, or a USB/CAN clock out of tolerance.</dd>
+<dt>Why this tool</dt><dd>It computes the copper capacitance of each crystal trace to GND from the real geometry and stackup,
+so the stray part of the formula is a number, not a guess.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Ports: P1 = the MCU's XTAL_IN pad, P2 = the crystal's pad on that net. Return: GND.</li>
+  <li>Extract; read the copper C to the return in the Summary. Repeat for the XTAL_OUT net.</li>
+  <li>C<sub>stray</sub> per pin = copper C + the MCU pin capacitance (datasheet, typically 2–5 pF). Choose C1, C2 so that the series combination of (C1 + stray<sub>1</sub>) and (C2 + stray<sub>2</sub>) equals C<sub>L</sub>.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>Copper C per net (often 0.5–1.5 pF on a 4-layer board with GND under the crystal, more on two layers with a pour around it); whether the GND guard ring you drew adds more than you thought.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>2. Ringing on a fast SPI clock with several loads</h4>
+<p class="who">Embedded designer, SPI at 40 MHz from an MCU to a flash, an ADC and a display connector, plus a test point.</p>
+<dl>
+<dt>Situation</dt><dd>The display glitches when the flash is accessed. A scope on the test point shows overshoot. The
+MCU's edges are about 1 ns regardless of the 40 MHz clock, and the trace branches to three loads with a stub to the test
+point: classic reflections.</dd>
+<dt>Why this tool</dt><dd>It turns the real branched routing, stubs included, into a netlist so the clock can be simulated
+in SPICE with the driver's output resistance and the receivers' input capacitance, and series termination values tried in
+minutes.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Ports: P1 = MCU SCK pad, P2/P3/P4 = the three receivers' SCK pads. Leave the test point as a stub ("Include stubs" on).</li>
+  <li>f max: enter 1 ns as rise time → 350 MHz. Extract. Check the Board tab for Z₀ steps (a via or a neck-down to a connector).</li>
+  <li>Save the subcircuit; in ngspice/LTspice drive P1 through 25–40 Ω (typical MCU output) from a 0–3.3 V, 1 ns edge; load P2–P4 with 5 pF each; tie REF to ground.</li>
+  <li>Look at each receiver's waveform for overshoot, ringing through the threshold (a double clock), and the delay. Add a series resistor at the driver (an element in the tool, or in SPICE) and sweep 0–68 Ω.</li>
+</ol></dd>
+<dt>Caveat</dt><dd>No crosstalk from neighbouring signals; a plain RLC model (no IBIS).</dd>
+</dl></div>
+
+<div class="uc">
+<h4>3. The input path of a converter for an inrush / input-filter simulation</h4>
+<p class="who">Power designer, DC-DC converter fed from a battery or a plug-in supply, power routed in pours.</p>
+<dl>
+<dt>Situation</dt><dd>Hot-plugging the supply rings the input up to twice its voltage (a known problem with ceramic input
+caps and long leads), and the input filter's stability depends on the source impedance. The path from the input connector
+to the switch runs through pours, an inductor and capacitors.</dd>
+<dt>Why this tool</dt><dd>Pours are not traces: the tool meshes them and reduces them to R and L between the pads on them,
+and places the inductor and caps as elements, giving a model of the whole input path for a SPICE hot-plug simulation.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Ports: P1 = the input connector's supply pad, P2 = the switch's drain pad. Return: the input ground net.</li>
+  <li>Elements: the input inductor as an L element (its value), the input caps as C elements to the return pads.</li>
+  <li>Extract. The Summary lists the copper R and L besides the inductor, and the pour branches. In SPICE add the source and cable (for example 0.1 Ω, 1 µH) and a switch closing at t = 0.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>The copper R, L and C next to what you add in SPICE. Typically the copper is a few mΩ and some tens of nH, so the cable dominates the inductance, while the copper and the caps' ESR set the damping the ring sees.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>4. A 50 Ω RF feed with a layer change</h4>
+<p class="who">IoT radio board, module output to an SMA connector, 2.4 GHz, 4-layer.</p>
+<dl>
+<dt>Situation</dt><dd>The feed changes from top to bottom through a via to reach the connector, and narrows at the
+module's pad. Is it still 50 Ω where it matters?</dd>
+<dt>Why this tool</dt><dd>The Board tab colours each piece by its solved Z₀ (with the real return layer underneath, which
+changes after the via) and marks steps of more than 10 %. The via's L and C are listed.</dd>
+<dt>Steps</dt><dd>Ports at the module RF pad and the SMA centre pin; return GND; f max 6 GHz. Extract. Read the Segments
+table's Z₀ and "return found" per piece; check the via. Adjust the bottom-layer width (the line calculator above gives the
+first guess), extract again. For a TDR view, drive the subcircuit with a 50 Ω step source in SPICE.</dd>
+<dt>Caveat</dt><dd>At 2.4 GHz a long feed is near the quasi-static limit, and the connector's own model is not included. Use
+this to catch layout mistakes; final RF verification belongs to a full-wave tool or the VNA.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>5. A gate-drive trace to a remote MOSFET</h4>
+<p class="who">Discrete motor drive, gate driver IC 40 mm from the FETs.</p>
+<dl>
+<dt>Situation</dt><dd>You want to see in SPICE (with the FET's vendor model) whether the gate rings with the trace's
+inductance and the FET's C<sub>iss</sub>, and size the gate resistor.</dd>
+<dt>Why this tool</dt><dd>It gives the gate trace's R and L (with its return over the plane, or without one on a two-layer
+board) in a form you drop next to the FET model.</dd>
+<dt>Steps</dt><dd>Ports: P1 driver output pad, P2 FET gate pad; return: the source net or GND; the gate resistor as an element
+or left for SPICE. Extract, export, and simulate driver step → subcircuit → FET model.</dd>
+<dt>Note</dt><dd>For a complete power stage (gate loop coupled with the power loop, common-source inductance, Miller turn-on)
+use the <a href="#loop">Switching Loop</a> tool, which solves both loops together.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>6. An analog sensor line on a board without a ground plane</h4>
+<p class="who">Low-cost 2-layer board, a thermistor or load-cell line 120 mm long next to a switching node.</p>
+<dl>
+<dt>Situation</dt><dd>The reading is noisy. Before re-spinning to 4 layers, how much inductance and capacitance does the line
+have, and does it see any return copper at all?</dd>
+<dt>Why this tool</dt><dd>The Segments table states the return found per piece ("none in window" where the GND pour is far),
+and the board view marks those pieces red. That is exactly where the loop area, and the noise pickup, is.</dd>
+<dt>Steps</dt><dd>Ports at the sensor connector and the ADC pin, return GND, f max 50 MHz. Extract; look at the red pieces;
+route a GND track alongside or pour under them; compare L.</dd>
+</dl></div>
+
+<h2 id="loop">Switching Loop</h2>
+<p class="lead">For a hard-switched power stage (buck, boost, half-bridge, motor phase, a converter IC with internal
+switches): the inductance of the hot loop and of each gate loop as laid out, where that inductance sits, how the switch
+node rings, the switching edges in time, a snubber designer, an EMI estimate, a before/after comparison of layout changes,
+and the switches' losses for the thermal map.</p>
+<figure><img src="screenshots/loop_summary.png" alt="Switching Loop window with cell diagram, parts list and results" loading="lazy">
+<figcaption>Cell diagram, parts and gate drives on the left; results on the right.</figcaption></figure>
+
+<h3 id="loop-how">How it works</h3>
+<p>When a switch turns off, the current that flowed through it must move to the other switch within nanoseconds. It
+circulates in the <b>hot loop</b>: hot-loop capacitor → upper switch → switch node → lower switch → return → back to the
+capacitor. Its inductance L stores energy that rings with the off switch's capacitance (C<sub>oss</sub>) at
+f = 1/(2π√(LC)), overshoots by about L·di/dt, and radiates. Typical good SMD layouts have 0.5–2 nH; a loop of 5 nH at
+5 A/ns overshoots by 25 V.</p>
+<svg class="flow" viewBox="0 0 900 190" role="img" aria-label="Switching Loop solution flow">
+  <rect class="box" x="5" y="20" width="155" height="66" rx="8"/><text x="82" y="46" text-anchor="middle">Cell setup</text><text class="sm" x="82" y="66" text-anchor="middle">switches, caps, drivers</text>
+  <rect class="boxa" x="190" y="20" width="160" height="66" rx="8"/><text x="270" y="46" text-anchor="middle">PEEC mesh</text><text class="sm" x="270" y="66" text-anchor="middle">all nets, ground included</text>
+  <rect class="boxa" x="380" y="20" width="160" height="66" rx="8"/><text x="460" y="46" text-anchor="middle">Partial L, R, C</text><text class="sm" x="460" y="66" text-anchor="middle">copper between pins</text>
+  <rect class="box" x="570" y="20" width="150" height="66" rx="8"/><text x="645" y="46" text-anchor="middle">Frequency</text><text class="sm" x="645" y="66" text-anchor="middle">L loop, ring f, Q, L_cs</text>
+  <rect class="box" x="750" y="20" width="145" height="66" rx="8"/><text x="822" y="46" text-anchor="middle">Transient</text><text class="sm" x="822" y="66" text-anchor="middle">turn-on / turn-off</text>
+  <rect class="box" x="570" y="115" width="150" height="56" rx="8"/><text x="645" y="140" text-anchor="middle">Snubber</text><text class="sm" x="645" y="158" text-anchor="middle">lumped designer</text>
+  <rect class="box" x="750" y="115" width="145" height="56" rx="8"/><text x="822" y="140" text-anchor="middle">EMI · losses</text><text class="sm" x="822" y="158" text-anchor="middle">spectrum, heat</text>
+  <path class="arr" d="M160,53 H188"/><path class="arr" d="M350,53 H378"/><path class="arr" d="M540,53 H568"/><path class="arr" d="M720,53 H748"/>
+  <path class="arr" d="M645,88 V113"/><path class="arr" d="M822,88 V113"/>
+</svg>
+<ol>
+  <li><b>The cell.</b> An upper and a lower switching position between a rail (the supply side) and its return, the switch
+  node between them, the hot-loop capacitors across rail and return, and a gate drive per FET (driver output pin → any
+  series parts → gate, source → driver return pin). "Detect parts" finds all of it from the switch node: FETs and diodes on
+  it, the caps between rail and return within 20 mm, 0 Ω rail links, the driver pins, converter ICs with internal switches.</li>
+  <li><b>PEEC mesh.</b> The copper of every net of the cell, ground included, in a window around the parts, is cut into
+  cells (adaptive: a coarse first pass finds where the loop's energy sits, which is then meshed finely). Neighbouring cells
+  of one net are joined by current bars; vias are vertical bars; narrow tracks are chains of bars along the track.</li>
+  <li><b>Partial inductance.</b> Every bar's self and mutual inductance with every other bar (exact integrals for close
+  parallel tapes, filament formulas further away, Neumann's integral at an angle), R with skin effect, and capacitance
+  between nets from the same cells. A mesh-current solve gives the copper's impedance between the parts' pins at several
+  frequencies. Unlike a "ground is ideal" model, the return copper spreads as it really does.</li>
+  <li><b>Circuits.</b> The copper block plus the parts (FET packages with their pin inductances and capacitances, the
+  capacitors' ESR and ESL, the drivers' resistance) gives, per commutation: the loop L across the switch turning off (copper
+  alone and with the parts), its split by net, layer, vias and part ("Where the L is"), the ringing frequency and Q, the gate
+  loops' L and the common-source inductance L<sub>cs</sub> (the mutual between gate loop and power loop that subtracts
+  L<sub>cs</sub>·di/dt from the gate drive).</li>
+  <li><b>Transient.</b> One turn-off and one turn-on of the hard-switched switch, solved in time as one circuit (copper as
+  coupled inductors at the ringing frequency, FETs with a square-law channel, voltage-dependent C<sub>gd</sub>/C<sub>ds</sub>,
+  body diode with reverse recovery; drivers as stepping sources; the inductor as a constant current). Built-in solver
+  (trapezoidal + Newton), or ngspice (bundled with KiCad) for vendor SPICE models.</li>
+  <li><b>Design aids.</b> A lumped snubber designer, an EMI spectrum built from the simulated edges, a baseline to compare
+  layout changes against, and the switches' losses sent to DC &amp; Thermal.</li>
+</ol>
+
+<h3 id="loop-use">Using it</h3>
+<ol>
+  <li><b>Switch node</b>: pick it (nets joining an inductor and a switch are listed first) or select one of its pads in KiCad; "Detect parts". Check the cell diagram: it is drawn as the converter is (a buck input caps | switches | inductor → output, a boost the mirror image, input → inductor → switches | output caps), with the supply side at the top, the return at the bottom, and each switch's gate drive. Several cells per board (a 4-switch buck-boost, a full bridge, several converters): "New cell…", or the Checks button that offers the other leg.</li>
+  <li><b>Topology</b>: "Detect from the parts" names the cell (synchronous or diode-rectified buck or boost, a 4-switch buck-boost's input or output leg) in the diagram's title; set it by hand for a half-bridge or when the detection only guessed. It fixes which switch is hard-switched and what the rail is (a buck's input, a boost's output, a bridge's bus).</li>
+  <li><b>Checks</b> lists what is missing or doubtful, worst first, each with a fix button (✖ blocks the analysis, ⚠ makes it doubtful, e.g. generic part values).</li>
+  <li><b>Models</b>: "Edit model…" per part: R<sub>DS(on)</sub>, C<sub>iss</sub>/C<sub>oss</sub>/C<sub>rss</sub> at their V<sub>DS</sub>, V<sub>th</sub>, g<sub>fs</sub>, Q<sub>rr</sub>, package inductances, rise/fall times; N/P channel; Kelvin source pads; a vendor SPICE file. "Save as…" stores a model by part number for every board.</li>
+  <li><b>Gate drives</b>: driver output/return pins, R out (source/sink), drive voltage, the series parts (resistors, beads, any pad-to-pad element).</li>
+  <li><b>Operating point</b>: "From the converter's V<sub>in</sub>, V<sub>out</sub>, I<sub>out</sub>…" fills the voltage across the switches, the inductor current, its ripple and the duty cycle from the topology's formulas (inductance read from the board; discontinuous mode handled for diode rectifiers). Or enter them by hand, with the switching frequency and, for a half-bridge, the current's direction. Tick "Simulate the switching edges".</li>
+  <li><b>Analyse.</b> Tabs: <em>Summary</em> (a plain-language "What it means", per-commutation table, gate loops), <em>Switching</em> (edge table and waveforms, losses), <em>Snubber</em>, <em>EMI</em>, <em>Where the L is</em>, <em>Impedance</em>, <em>Map</em> (current and inductance density per layer), <em>SPICE</em> (coupled-inductor model of the copper), <em>Compare</em>.</li>
+  <li><b>Iterate</b>: "Keep these results as the baseline", change the layout in KiCad, "Save in KiCad, reload and analyse", read the Compare tab.</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/loop_breakdown.png" alt="Where the inductance is" loading="lazy"><figcaption>Where the L is: by net, layer, vias and part.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_map.png" alt="Current density map" loading="lazy"><figcaption>Map: HF current density.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_impedance.png" alt="Impedance plot" loading="lazy"><figcaption>Impedance across the switch.</figcaption></figure>
+</div>
+
+<h3 id="loop-ring">Ringing &amp; snubber explorer</h3>
+<p>The tool's snubber designer uses this lumped model of a hard turn-off: the voltage has risen to the supply, then the
+switch current falls at di/dt; the loop L and R ring with the switch capacitance C<sub>par</sub>; an RC snubber
+(R<sub>s</sub>, C<sub>s</sub>, its ESL) across the switch damps it. Same equations, same integrator.</p>
+<div class="widget" id="w-snub">
+  <h4>Turn-off overshoot and ringing, with and without an RC snubber</h4>
+  <div class="controls">
+    <label>Loop L <span class="v" data-o="sL"></span><input type="range" id="sL" min="0.3" max="20" step="0.1" value="4"></label>
+    <label>Switch C<sub>par</sub> <span class="v" data-o="sC"></span><input type="range" id="sC" min="50" max="3000" step="10" value="450"></label>
+    <label>Loop R <span class="v" data-o="sR"></span><input type="range" id="sR" min="5" max="500" step="1" value="100"></label>
+    <label>Supply V <span class="v" data-o="sV"></span><input type="range" id="sV" min="3" max="400" step="1" value="24"></label>
+    <label>Current I <span class="v" data-o="sI"></span><input type="range" id="sI" min="0.5" max="60" step="0.5" value="10"></label>
+    <label>di/dt <span class="v" data-o="sD"></span><input type="range" id="sD" min="0.2" max="20" step="0.1" value="4"></label>
+    <label>Snubber R<sub>s</sub> <span class="v" data-o="sRs"></span><input type="range" id="sRs" min="-1" max="2" step="0.01" value="0.48"></label>
+    <label>Snubber C<sub>s</sub> <span class="v" data-o="sCs"></span><input type="range" id="sCs" min="0" max="10000" step="50" value="1350"></label>
+    <label>Snubber ESL <span class="v" data-o="sE"></span><input type="range" id="sE" min="0.1" max="5" step="0.1" value="1"></label>
+    <label>f<sub>sw</sub> (for loss) <span class="v" data-o="sF"></span><input type="range" id="sF" min="20" max="3000" step="10" value="500"></label>
+  </div>
+  <p><button type="button" id="sSug">Suggest R<sub>s</sub> = √(L/C<sub>par</sub>), C<sub>s</sub> = 3 C<sub>par</sub></button></p>
+  <div class="out" id="so"></div>
+  <canvas class="plot" id="splot" aria-label="Voltage across the switch against time"></canvas>
+  <div class="legend"><i style="background:var(--mute)"></i>no snubber <i style="background:var(--c1)"></i>with the snubber <i style="background:var(--c3)"></i>supply</div>
+</div>
+<p>Things to try: halve L and see both the overshoot and the ring frequency change (the layout fix); raise R<sub>s</sub>
+far above √(L/C) (the snubber stops damping) or far below (C<sub>s</sub> just adds to C<sub>par</sub>: lower peak, longer
+ring); make C<sub>s</sub> large and watch the loss C<sub>s</sub>V²f<sub>sw</sub> grow.</p>
+
+<h3 id="loop-emi">Spectrum explorer</h3>
+<p>The EMI tab builds one switching period from the two simulated edges and takes its Fourier series. A trapezoid with
+duty d and rise time t<sub>r</sub> has an envelope that is flat up to 1/(π·d·T), falls 20 dB/decade up to 1/(π·t<sub>r</sub>),
+then 40 dB/decade. Ringing adds a bump at its frequency that rises above that envelope: often the line that fails the
+EMI scan.</p>
+<div class="widget" id="w-spec">
+  <h4>Switch-node voltage spectrum: trapezoid plus ringing</h4>
+  <div class="controls">
+    <label>Voltage <span class="v" data-o="eV"></span><input type="range" id="eV" min="3" max="400" step="1" value="12"></label>
+    <label>f<sub>sw</sub> <span class="v" data-o="eF"></span><input type="range" id="eF" min="50" max="3000" step="10" value="500"></label>
+    <label>Duty <span class="v" data-o="eD"></span><input type="range" id="eD" min="0.03" max="0.97" step="0.01" value="0.3"></label>
+    <label>Rise/fall time <span class="v" data-o="eT"></span><input type="range" id="eT" min="0.3" max="50" step="0.1" value="3"></label>
+    <label>Ring frequency <span class="v" data-o="eR"></span><input type="range" id="eR" min="20" max="500" step="1" value="120"></label>
+    <label>Ring amplitude <span class="v" data-o="eA"></span><input type="range" id="eA" min="0" max="1.5" step="0.01" value="0.5"></label>
+    <label>Ring Q <span class="v" data-o="eQ"></span><input type="range" id="eQ" min="0.5" max="40" step="0.5" value="12"></label>
+  </div>
+  <div class="out" id="eo"></div>
+  <canvas class="plot" id="eplot" aria-label="Harmonic spectrum of the switch node"></canvas>
+  <div class="legend"><i style="background:var(--c1)"></i>harmonics (dBµV) <i style="background:var(--mute)"></i>trapezoid envelope <i style="background:var(--c4)"></i>ring frequency</div>
+</div>
+<div class="note"><b>From the voltage spectrum to the EMI estimate</b>The tool then estimates <em>radiated</em> emission
+from the hot loop as a small magnetic loop: E = η₀k²·A·I/(4πr), with I the loop current's harmonics and A the loop's
+<em>effective area</em> (the magnetic moment of the extracted high-frequency currents per ampere, a number the tool reports in
+mm²), +6 dB for the test site's ground reflection; and <em>conducted</em> common-mode emission through the switch node's
+capacitance to the chassis into the two 50 Ω LISNs. Both are compared with CISPR 32 class A/B limits. They are indicators for
+comparing layouts and snubbers, not a prediction of the test result: cables usually radiate more than the board.</div>
+
+<h3 id="loop-limits">Limits</h3>
+<div class="limit"><b>What Switching Loop does not model</b>
+<ul>
+  <li><b>Topologies.</b> Buck and boost (synchronous or with a diode), half-bridge legs, and 4-switch buck-boost converters as two legs. SEPIC, Ćuk, inverting buck-boost and isolated converters are not covered: their hot loops close through a coupling capacitor or a transformer.</li>
+  <li><b>Quasi-static.</b> Fine while the loop is much smaller than a wavelength (30 mm is λ/10 at 1 GHz).</li>
+  <li><b>Window.</b> Copper outside the window around the parts, and eddy currents in unrelated nets' copper, are not included.</li>
+  <li><b>Transient copper at one frequency.</b> The time-domain copper model is R and L at the ringing frequency; skin-effect damping is exact there only.</li>
+  <li><b>Device models are datasheet level</b> (square-law channel, C(V) ∝ 1/√V, stored-charge recovery) unless you give a vendor SPICE model. 25 °C: V<sub>th</sub> and R<sub>DS(on)</sub> change when hot.</li>
+  <li><b>An IC's internal switch</b> is a conductance ramped over its rise/fall time (5 ns if not given) with C<sub>oss</sub>; no gate loop.</li>
+  <li><b>Timing</b> comes from the gate drive; datasheet delays are for reference. Dead time is not simulated (the edges are separate).</li>
+  <li><b>Snubber</b> is placed ideally at the switch's pads, with its ESL standing for its own copper; it is not a footprint.</li>
+  <li><b>EMI</b>: hot-loop radiation and common-mode conduction only; no cable radiation, no differential-mode conducted noise (it depends on the input filter), peak sum instead of quasi-peak/average detectors. Use it to compare, not to predict a pass.</li>
+  <li><b>Losses</b> exclude dead-time (body diode) conduction and gate-drive loss.</li>
+  <li><b>Memory</b>: the dense inductance matrix grows with the square of the cells (about 2 GB at 4000 cells); the tool lowers the cell count to fit in 40 % of free memory.</li>
+</ul></div>
+
+<h3 id="loop-cases">Use cases</h3>
+
+<div class="uc">
+<h4>1. Reviewing a synchronous buck layout before ordering boards</h4>
+<p class="who">Power designer, 24 V → 5 V, 8 A, 400 kHz, discrete FETs in 5×6 mm packages, half-bridge driver, 4-layer.</p>
+<dl>
+<dt>Situation</dt><dd>Two placements are on the table: input caps on the same side as the FETs (short, but the layout is
+crowded), or on the bottom directly under them with vias. The datasheet application note says "minimise the hot loop" but
+not by how much each option does it.</dd>
+<dt>Why this tool</dt><dd>It gives the loop inductance of each layout, splits it by contributor (copper per layer, vias, cap
+ESL, FET packages), and predicts the overshoot at the real di/dt, so the decision is a number. The baseline makes the
+comparison direct.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Pick the switch node, "Detect parts". Enter the FETs' datasheet values ("Edit model…"; "Save as…" so the next board gets them too) and the driver's R out.</li>
+  <li>Operating point: "From the converter…" with 24 V in, 5 V out, 8 A, 400 kHz and the 4.1 µH inductor read from the board gives 24 V across the switches, 8 A, ripple 2.4 A, duty 0.21. Tick "Simulate the switching edges". Analyse.</li>
+  <li>Read "What it means": the loop L with its rating, the ring, the overshoot against 24 V, the three biggest contributors you can change, with a tip each.</li>
+  <li>Compare tab: "Keep these results as the baseline". Move the caps in KiCad; "Save in KiCad, reload and analyse".</li>
+  <li>Compare tab: loop L, ringing, V peak and switching loss, before and after, with the edge waveforms overlaid.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>Loop L below 2 nH for this class; overshoot leaving 20 % margin on the FETs' 40 V rating; whether vias dominate "Where the L is" (then more vias in parallel at the cap and FET pads); the upper FET's gate loop ringing (raise its gate resistor to the damping value given).</dd>
+</dl></div>
+
+<div class="uc">
+<h4>2. Switch-node ringing fails the radiated EMI scan</h4>
+<p class="who">Product team, pre-compliance scan failed by 8 dB at 140 MHz, CISPR 32 class B.</p>
+<dl>
+<dt>Situation</dt><dd>The spike sits at the switch node's ringing frequency (seen on a scope with a short ground spring). The
+options are a snubber (loss), slower gate drive (loss and heat), or a layout change (time). Which one, and how big?</dd>
+<dt>Why this tool</dt><dd>It reproduces the ring from the layout, designs a snubber against the switch's own capacitance,
+checks it on the board, and shows the change in the EMI estimate and in the losses, side by side.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Analyse with the edges simulated. Confirm the ringing frequency matches the measured spike (within 10–20 %; if not, check the FET's C<sub>oss</sub> and the caps' ESL).</li>
+  <li>EMI tab: choose class B, 10 m (or 3 m as tested). "What it means" names the worst margin and whether it is the ring.</li>
+  <li>Compare tab: keep as baseline.</li>
+  <li>Snubber tab: "Across" = the switch that rings worst (a buck's lower FET rings at the upper's turn-on); "Suggest values"; look at the R<sub>s</sub> sweep and the loss; round to real parts (e.g. 2.2 Ω, 1 nF C0G); "Put in the cell"; Analyse.</li>
+  <li>Compare: ring Q, V peak, radiated margin, switching loss + snubber loss. Try instead a higher gate resistor (Edit drive…) and compare again.</li>
+</ol></dd>
+<dt>Caveat</dt><dd>The tool's EMI number is not the chamber's: use the change in dB between variants. A ring fixed on the board can still radiate through a cable if the cable is the antenna; the conducted common-mode estimate (with the switch node's capacitance to the chassis) hints at that path.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>3. Will the off FET turn itself on? A 48 V motor half-bridge</h4>
+<p class="who">Motor-drive designer, 48 V bus, 30 A phase current, FETs with V<sub>th</sub> 2.5 V (lower when hot).</p>
+<dl>
+<dt>Situation</dt><dd>At fast turn-on of one FET, the switch node slews at 10–20 V/ns. That dv/dt pushes current through the
+other FET's C<sub>gd</sub> into its gate; if its gate rises above V<sub>th</sub> both conduct (shoot-through) for a few ns:
+heat, current spikes, EMI. The common-source inductance makes it worse.</dd>
+<dt>Why this tool</dt><dd>The transient simulates the gate loops and the power loop as one circuit with the real copper, so the
+held-off gate's bounce is computed, not guessed. L<sub>cs</sub> is reported per FET.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Enter both FETs' models (vendor SPICE model if you have it: the edges then run in ngspice), the driver's sink resistance (R out off), drive voltage, any gate-source capacitor as a part.</li>
+  <li>Topology: Half-bridge. "From the converter…": bus 48 V, mean phase voltage, phase current +30 A (out of the switch node) or −30 A (into it): the sign decides which FET is hard-switched. Analyse.</li>
+  <li>Switching tab: "Other gate peak" against its V<sub>th</sub>; "What it means" marks ✖ shoot-through or ⚠ close (and reminds that V<sub>th</sub> falls when hot).</li>
+  <li>Try: a Kelvin source connection ("Edit model…" Kelvin pads), lower sink resistance, a gate-source capacitor, a slower turn-on resistor; compare against the baseline.</li>
+</ol></dd>
+<dt>Caveat</dt><dd>Negative gate drive is modelled as the drive voltage you give; the driver's own internal dynamics (propagation delay, UVLO) are not.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>4. A synchronous boost IC: is the output capacitor in the right place?</h4>
+<p class="who">Battery product, 1-cell Li-ion → 5 V boost IC with internal switches, 2 A.</p>
+<dl>
+<dt>Situation</dt><dd>In a boost the hot loop is on the <em>output</em> side: SW → internal high-side switch → VOUT pin →
+output cap → GND → low-side switch. The schematic puts a 0 Ω option resistor between the VOUT pin and the output net. Is the
+cap close enough, and does the option resistor hurt?</dd>
+<dt>Why this tool</dt><dd>Detection follows the IC's pins (the hot-loop rail is the IC power net that is not the inductor's far
+end), follows 0 Ω links to the caps behind them, and the breakdown shows how much of the loop is the link's copper.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Pick the SW net; "Detect parts": the IC becomes two internal switches; the caps behind the 0 Ω link are found and the link shown as a "Rail link".</li>
+  <li>Edit the internal switches: R<sub>DS(on)</sub>, rise/fall time from the datasheet; C<sub>oss</sub> if given (else left out).</li>
+  <li>Analyse. "Where the L is": the share of the link's copper and of each cap's ESL.</li>
+  <li>Try a small 100 nF 0402 directly at the VOUT and GND pins (Add… → hot-loop cap after placing it in KiCad); compare.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>A loop of several nH where a well-placed cap would give 1–2 nH, with a large share in the copper between the VOUT pin and the link: the cap belongs at the pins, and the link's copper is the thing to shorten.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>5. Choosing between two MOSFETs</h4>
+<p class="who">Cost-down of an existing design: replace a FET with a cheaper one in the same package.</p>
+<dl>
+<dt>Situation</dt><dd>The cheaper part has lower C<sub>oss</sub> but more Q<sub>rr</sub> and a different V<sub>th</sub>.
+Switching loss, overshoot and gate margin all move.</dd>
+<dt>Why this tool</dt><dd>The same board, the same edges, two device models: the Compare tab shows the difference in every
+number that matters.</dd>
+<dt>Steps</dt><dd>Analyse with the current FET; keep as baseline; "Edit model…" → the new part's datasheet values or its
+vendor SPICE model (file, subcircuit, pin order); Analyse; Compare: E<sub>on</sub>, E<sub>off</sub>, switching loss, peak,
+recovery current, other gate peak.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>6. From switching losses to board temperature</h4>
+<p class="who">Compact power supply, no heatsink: the FETs are cooled by copper.</p>
+<dl>
+<dt>Situation</dt><dd>Is the copper around the FETs enough for their losses at full load in a 50 °C enclosure?</dd>
+<dt>Why this tool</dt><dd>Switching Loop computes each switch's switching loss (from the simulated edges) and conduction
+loss (I<sub>rms</sub>²R<sub>DS(on)</sub> at the duty cycle) and puts them on the parts' pads in DC &amp; Thermal.</dd>
+<dt>Steps</dt><dd>Analyse with the edges simulated and the real duty cycle; Switching tab: "Send losses to DC &amp; Thermal…"
+(it lists the watts per part); open DC &amp; Thermal; set the ambient; run with thermal on; read the temperature under the
+FETs (see <a href="#uc-dc-fet">DC use case 7</a>).</dd>
+</dl></div>
+
+<h2 id="match">Matching &amp; Tolerance</h2>
+<p class="lead">Build an RF matching network from real parts and see whether it still matches when every part sits
+anywhere in its tolerance: corners, Monte Carlo, a worst-case search, yield per band, which part matters most, and the BOM.</p>
+<figure><img src="screenshots/matching_editor.png" alt="Matching editor with schematic and property grid" loading="lazy">
+<figcaption>The visual editor: source, ports, one cell per part, load. Click to edit, drag to reorder.</figcaption></figure>
+
+<h3 id="match-how">How it works</h3>
+<ul>
+  <li><b>Network.</b> A ladder of series and shunt slots between a source impedance Z<sub>S</sub> and a load Z<sub>L</sub>.
+  Each slot holds an L, C or R (an ideal value or a library part with its parasitics), a transmission line (ideal Z₀/ε<sub>eff</sub>
+  or a microstrip from the board's stackup), an open or shorted stub, or a two-port from a Touchstone <code>.s2p</code> file.
+  The load can be R + jX, an RLC model or a measured <code>.s1p</code> (an antenna's S11 from a VNA).</li>
+  <li><b>Real parts.</b> L: tolerance, DCR, Q at a frequency, SRF (series R(f) = DCR + k√f fitted to Q, parallel C from the
+  SRF). C: tolerance (± %, ± pF or the codes A/B/C/D = 0.05/0.1/0.25/0.5 pF), ESR or Q, ESL or SRF, dielectric (C0G, X7R…) with
+  temperature and DC-bias behaviour. R: tolerance, series L, parallel C.</li>
+  <li><b>Cascade.</b> Each slot is an ABCD matrix; the chain is multiplied for every frequency and every sample at once
+  (arrays of samples × frequencies), so 10 000 Monte Carlo samples take about a second. Γ<sub>in</sub> is the reflection
+  against Z<sub>S</sub>*, and the transducer gain gives the insertion loss including the parts' loss.</li>
+  <li><b>Analyses.</b> <em>Corners</em> (every variable at both limits; up to 14 variables), <em>Monte Carlo</em> (uniform, or
+  Gaussian with 3σ = tolerance), <em>worst-case search</em> (a bounded optimiser per band and metric, started from the worst
+  corners and samples; a resonant match can be worst inside the tolerance box, which corners miss), <em>sensitivity</em> (a
+  one-at-a-time tornado chart and each part's share of the variance), and an optional <em>temperature sweep</em>.</li>
+  <li><b>Specs</b> per band: minimum return loss, maximum insertion loss, maximum VSWR. Yield = the share of samples meeting
+  all of them across the band.</li>
+</ul>
+
+<h3 id="match-use">Using it</h3>
+<ol>
+  <li>Set the source and load (port boxes in the schematic), the sweep and one or more bands with their specs.</li>
+  <li>Add parts from the palette (they appear at the ▼ marker), pick a library part or type values (<code>4n7</code>, <code>1.2p</code>), set tolerances. The nominal response redraws as you edit.</li>
+  <li>"Width for Z0…" and "Use board stackup" for microstrip slots.</li>
+  <li>Run the analysis; read the plots: Smith chart with the Monte Carlo cloud, S11 / S21 / VSWR with min–max and 5–95 % bands, histograms with yield per band, sensitivity, worst-case table and BOM (CSV).</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/matching_smith.png" alt="Smith chart" loading="lazy"><figcaption>Smith chart with tolerance cloud.</figcaption></figure>
+  <figure class="card"><img src="screenshots/matching_s11.png" alt="S11 plot" loading="lazy"><figcaption>S11 with spread.</figcaption></figure>
+  <figure class="card"><img src="screenshots/matching_histograms.png" alt="Histograms" loading="lazy"><figcaption>Yield per band.</figcaption></figure>
+  <figure class="card"><img src="screenshots/matching_sensitivity.png" alt="Sensitivity" loading="lazy"><figcaption>Which part matters.</figcaption></figure>
+</div>
+
+<h3 id="match-mc">Tolerance explorer</h3>
+<p>A two-part L-match (shunt C at the 50 Ω side, series L toward the load) designed for the centre of the 2.4 GHz band,
+then 4000 random builds with the tolerances you choose. The histogram is the worst return loss across 2.400–2.4835 GHz per
+build: the same kind of result as the tool's histogram tab.</p>
+<div class="widget" id="w-mc">
+  <h4>L-match yield with real tolerances</h4>
+  <div class="controls">
+    <label>Load R <span class="v" data-o="mR"></span><input type="range" id="mR" min="5" max="45" step="1" value="6"></label>
+    <label>Load series L <span class="v" data-o="mX"></span><input type="range" id="mX" min="0" max="3" step="0.05" value="0"></label>
+    <label>Inductor tolerance <span class="v" data-o="mLt"></span><input type="range" id="mLt" min="0.5" max="10" step="0.5" value="5"></label>
+    <label>Capacitor tolerance<select id="mCt"><option value="0.05">A ±0.05 pF</option><option value="0.1">B ±0.1 pF</option><option value="0.25" selected>C ±0.25 pF</option><option value="0.5">D ±0.5 pF</option></select></label>
+    <label>Load spread (R and L) <span class="v" data-o="mLs"></span><input type="range" id="mLs" min="0" max="20" step="1" value="8"></label>
+    <label>Distribution<select id="mDi"><option value="u">uniform</option><option value="g">Gaussian, 3σ = tolerance</option></select></label>
+    <label>Spec: return loss ≥ <span class="v" data-o="mS"></span><input type="range" id="mS" min="6" max="20" step="0.5" value="15"></label>
+  </div>
+  <div class="out" id="mo"></div>
+  <canvas class="plot" id="mplot" aria-label="Histogram of worst in-band return loss"></canvas>
+  <div class="legend"><i style="background:var(--c1)"></i>passing builds <i style="background:var(--c4)"></i>failing builds <i style="background:var(--c3)"></i>spec</div>
+</div>
+<p>With these settings (a 6 Ω load, a 15 dB spec, a ±0.25 pF capacitor) about 2 % of builds fail, all from the tail
+of the distribution, although the nominal design reaches 27 dB. Switch the capacitor to code B and the yield is 100 %. At
+2.4 GHz a 3.5 pF capacitor with ±0.25 pF is a ±7 % part, and a lower load resistance (a higher-Q match) makes it matter more:
+try 5 Ω, or a ±10 % load spread. A real network has more parts, their parasitics and a measured load, which is what the tool
+handles.</p>
+
+<h3 id="match-limits">Limits</h3>
+<div class="limit"><b>What Matching &amp; Tolerance does not model</b>
+<ul>
+  <li>A ladder only (series/shunt slots); a general netlist and import from the KiCad schematic are not there yet.</li>
+  <li>No coupling between parts, no pad or via parasitics unless you add them as elements (the Trace tool gives their values).</li>
+  <li>Microstrip is quasi-static (no dispersion, no thickness correction).</li>
+  <li>An <code>.s2p</code> part is fixed (no tolerance).</li>
+  <li>Return loss, insertion loss, VSWR: no noise figure, no non-linear (power) effects.</li>
+  <li>Not yet: automatic synthesis of L/π/T networks, snapping to E-series, design centring.</li>
+</ul></div>
+
+<h3 id="match-cases">Use cases</h3>
+
+<div class="uc">
+<h4>1. A 2.4 GHz chip antenna: which capacitor tolerance code to buy?</h4>
+<p class="who">IoT device, BLE module, chip antenna on a small ground plane, π-match footprint with three 0402 parts.</p>
+<dl>
+<dt>Situation</dt><dd>A VNA measurement of the antenna on the real board (with the enclosure) gave its S11. The tuned values
+are 1.8 nH series and 1.2 pF / 0.8 pF shunt. Production must reach at least 10 dB return loss across 2.400–2.4835 GHz.
+The ±0.05 pF (A) capacitors cost more than ±0.25 pF (C): is A needed, or does B do?</dd>
+<dt>Why this tool</dt><dd>It runs the measured antenna (<code>.s1p</code>) as the load with the real parts' tolerances,
+parasitics (0402 ESL and Q) and either distribution, and gives the yield per tolerance code, and the sensitivity shows which
+of the three parts needs the tight tolerance.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Load: the <code>.s1p</code> file. Source: 50 Ω. Band 2.400–2.4835 GHz, RL ≥ 10 dB.</li>
+  <li>Add shunt C, series L, shunt C from the library (0402 parts: ESL and Q included), with the tuned values.</li>
+  <li>Monte Carlo with code C on both capacitors: read the yield. Repeat with B, then A only on the part the sensitivity chart ranks first.</li>
+  <li>Run the worst-case search to see the worst build inside the tolerance box; export the BOM.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>Yield per option; the tornado chart (often one shunt capacitor dominates); the Smith chart cloud
+against the 10 dB circle.</dd>
+<dt>Caveat</dt><dd>The antenna's own production spread (ground plane, plastics, hand effect) is not in the <code>.s1p</code>; add margin, or model the load as RLC with a tolerance.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>2. An NFC antenna that detunes in the cold</h4>
+<p class="who">Access-control reader, 13.56 MHz loop antenna, series and parallel tuning capacitors.</p>
+<dl>
+<dt>Situation</dt><dd>Readers in an unheated entrance lose read range in winter. The tuning capacitors are X7R to save
+cost. An NFC antenna has a Q of 20–30, so 2 % of capacitance shifts it noticeably.</dd>
+<dt>Why this tool</dt><dd>The temperature sweep drifts capacitors by their dielectric (X7R vs C0G), so the match at
+−20 °C and +60 °C can be compared with the tolerance spread at room temperature.</dd>
+<dt>Steps</dt><dd>Load: the antenna as series R + L with its parallel C (measured, or from the design tool). Source: the
+reader IC's output impedance (e.g. 50 Ω after its EMC filter). Add the tuning C's with their dielectric. Run with the
+temperature sweep; compare X7R and C0G for yield at 13.56 MHz ± the bandwidth.</dd>
+<dt>Caveat</dt><dd>The card's coupling (load modulation) is not modelled: this is the unloaded antenna match.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>3. A sub-GHz radio: reference design values on your own board</h4>
+<p class="who">LoRa/Sigfox node at 868 MHz, transceiver's reference matching network copied into a different layout.</p>
+<dl>
+<dt>Situation</dt><dd>The reference design assumes its own stackup and trace lengths. Your feed is 12 mm long on a 0.2 mm
+dielectric. Does the network still meet its insertion-loss target (the transmit power budget) and its harmonic filtering?</dd>
+<dt>Why this tool</dt><dd>Microstrip slots take the board's stackup, so the real feed is part of the network, and the
+insertion loss per band includes the parts' Q.</dd>
+<dt>Steps</dt><dd>Source: the transceiver's optimal load impedance from its datasheet; load: 50 Ω (the antenna connector). Add
+the reference network parts and a microstrip slot for your feed ("Use board stackup", your width). Band: 863–870 MHz
+with RL ≥ 12 dB and IL ≤ 0.7 dB. Sweep up to 3 GHz and read the attenuation at the 2nd and 3rd harmonics (1.73 and 2.60 GHz)
+off the S21 plot with its tolerance band (the specs cover return loss, insertion loss and VSWR, not a minimum rejection).
+Monte Carlo; adjust; BOM.</dd>
+</dl></div>
+
+<h2 id="shared">Stackup, library and other panels</h2>
+<figure><img src="screenshots/home.png" alt="Home window with the tool tiles" loading="lazy"><figcaption>Home: the board, its stackup, the scenario file's contents and the tools.</figcaption></figure>
+<ul>
+  <li><b>Stackup &amp; materials.</b> Copper and dielectric thickness per layer from the board, with overrides (finished
+  outer copper after plating is often 45–60 µm on "1 oz" boards: it changes resistances by 30 %). ε<sub>r</sub> and tanδ
+  per dielectric, editable at a reference frequency, with the wideband Djordjevic–Sarkar model for their frequency
+  dependence (ε<sub>r</sub> falls slowly with f, tanδ nearly flat).<br><img src="screenshots/stackup.png" alt="Stackup panel" loading="lazy" style="max-width:520px"></li>
+  <li><b>Component library.</b> Built-in generic parts plus your own (<code>~/.config/pcb_current_sim/library.json</code>):
+  tolerance and parasitics, DC-bias derating for ceramics, a |Z| and Q plot at nominal and at the limits. Used by Matching and
+  by Switching Loop's capacitors.<br><img src="screenshots/component_library.png" alt="Component library" loading="lazy" style="max-width:520px"></li>
+  <li><b>Results browser.</b> Saved DC results (<code>.npz</code> + <code>.json</code>) under the board folder, to reopen.</li>
+  <li><b>External tools.</b> Detects openEMS, FastHenry, FastCap and ParaView. From the KiCad Flatpak, host programs can only
+  be started after <code>flatpak override --user --talk-name=org.freedesktop.Flatpak org.kicad.KiCad</code>.</li>
+</ul>
+
+<h2 id="choose">Which tool for which question</h2>
+<table>
+<thead><tr><th>Question</th><th>Tool</th><th>Main output</th></tr></thead>
+<tbody>
+<tr><td>Will this trace / plane / via get too hot? How much voltage does it lose?</td><td>DC &amp; Thermal</td><td>T map, ΔV per row, loss ranking</td></tr>
+<tr><td>Does the copper survive a short-circuit pulse of X A for Y ms?</td><td>DC &amp; Thermal (pulse)</td><td>T against time, time to melt</td></tr>
+<tr><td>Is the sense resistor's Kelvin tap in the right place?</td><td>DC &amp; Thermal</td><td>V map, ΔV between points</td></tr>
+<tr><td>What field does this current put on a nearby sensor?</td><td>DC &amp; Thermal (magnetic)</td><td>B maps</td></tr>
+<tr><td>What is this trace as a SPICE model? Its Z₀ and delay? Its C to ground?</td><td>Trace R/L/C → SPICE</td><td>.subckt, segment table</td></tr>
+<tr><td>How big is my converter's hot loop, and where is the inductance?</td><td>Switching Loop</td><td>L loop, breakdown, map</td></tr>
+<tr><td>How much does the switch node overshoot and ring? Do I need a snubber?</td><td>Switching Loop</td><td>edges, snubber tab</td></tr>
+<tr><td>Will the off FET turn on by itself (Miller turn-on)?</td><td>Switching Loop</td><td>other gate peak vs V<sub>th</sub></td></tr>
+<tr><td>Which layout variant is better for EMI?</td><td>Switching Loop (EMI + Compare)</td><td>margin change in dB</td></tr>
+<tr><td>Will my regulator overheat? Is it in dropout at the far end of the input?</td><td>DC &amp; Thermal</td><td>regulator P, T<sub>j</sub>, headroom</td></tr>
+<tr><td>Does my matching network survive part tolerances? Which code to buy?</td><td>Matching &amp; Tolerance</td><td>yield, worst case, sensitivity</td></tr>
+<tr><td>Does my rail stay within its ripple budget under load steps?</td><td>PDN (planned)</td><td>Z(f) against target</td></tr>
+</tbody></table>
+
+<h2 id="accuracy">Validation and accuracy</h2>
+<p>Every solver is checked against closed-form results in the test suite (<code>python3 -m pytest tests</code>, 127 tests).</p>
+<table>
+<thead><tr><th>Tool</th><th>Check</th><th>Agreement</th></tr></thead>
+<tbody>
+<tr><td rowspan="6">DC &amp; Thermal</td><td>Straight, arc and via resistance against analytic</td><td>within 1–2 % at 8 cells per width</td></tr>
+<tr><td>45° tracks against axis-aligned (cut-cell faces)</td><td>within 1–2 %</td></tr>
+<tr><td>B above an infinite strip</td><td>within 1 %</td></tr>
+<tr><td>Hairpin loop inductance against Grover</td><td>within 4 %</td></tr>
+<tr><td>Adiabatic pulse against Onderdonk (fusing time)</td><td>10.03 ms vs 10 ms</td></tr>
+<tr><td>Thermal cell 0.3 mm against 0.18 mm on a dense multi-layer board</td><td>T<sub>max</sub> 2 % of the rise lower</td></tr>
+<tr><td rowspan="3">Trace R/L/C</td><td>Microstrip / stripline field solve against Hammerstad–Jensen / Wheeler</td><td>within 1.5 % / 1.6 %</td></tr>
+<tr><td>Pour over a plane: C and L against εA/h and μ₀hl/W; R against DC solver</td><td>within 1 %; within 2 %</td></tr>
+<tr><td>Subcircuit delay in ngspice against the extracted delay</td><td>matches</td></tr>
+<tr><td rowspan="6">Switching Loop</td><td>Wide strip over a plane against Hammerstad; plane pair against image theory</td><td>0.4 %; 0.5 %</td></tr>
+<tr><td>Copper R against the DC solver</td><td>within 3 %</td></tr>
+<tr><td>Via pair, diagonal narrow track against hand formulas</td><td>within 5 %</td></tr>
+<tr><td>1 mm trace over a 1.5 mm plane against the 2D field solve</td><td>3–6 % high (few bars across a narrow trace)</td></tr>
+<tr><td>Transient solver against an analytic RLC step; ring f and Q against the frequency analysis</td><td>&lt; 1 %; f within a few %, Q within 30 %</td></tr>
+<tr><td>Built-in transient against ngspice with the same equations</td><td>peaks within 1 %, energies within 10 %</td></tr>
+<tr><td rowspan="2">Matching</td><td>50 → 10 Ω L-match, quarter-wave transformer, stubs, S2P = L</td><td>|Γ| &lt; 1e-9 at f₀; exact</td></tr>
+<tr><td>50 Ω microstrip on FR4 (h 1.6 mm, ε<sub>r</sub> 4.4)</td><td>3.0 mm width, as tables</td></tr>
+</tbody></table>
+<div class="note"><b>What accuracy means here</b>These numbers are the solvers' error against exact answers for the same
+model. The bigger uncertainties are usually inputs: finished copper thickness (±20 %), ε<sub>r</sub> of the real laminate
+(±5 %), part values and parasitics, and for heat the environment (enclosure, airflow, mounting). Enter what you know, and
+use the tools to compare variants: differences are more reliable than absolute values.</div>
+
+<h2 id="cli">Command line</h2>
+<pre><code># DC &amp; Thermal: rows SRC&gt;SNK:AMPS[:NAME]; pads joined with +
+python3 -m pcb_current_sim board.kicad_pcb --row "J1.2&gt;J2.2:3:signal" --row "J2.1&gt;J1.1:3:return" \
+    --out results --formats png,pdf,html,csv,npz [--no-thermal] [--pitch 0.05] \
+    [--thickness F.Cu=48um] [--ambient 25] [--h-conv 12 | --emissivity 0.9]
+#   voltage sources and loads: --vsource "PLUS&gt;MINUS:VOLTS[:NAME]"   --load "PLUS&gt;MINUS:AMPS[:NAME]"
+#   elements: --element "Q1.3-Q1.2=20m:Q1:0.35"  (R, name, watts)   --element "D1.2-D1.1=0.45V+20m:D1"  (diode)
+#   off-board element: suffix :ext       pulse: --pulse SCALE:MS[:steady]
+#   others: --no-auto-resistors --no-crop --no-magnetic --b-height MM --formats html3d,vtk
+
+# Trace R/L/C -&gt; SPICE
+python3 -m pcb_current_sim.extract board.kicad_pcb U1.12 J3.1 [more pads] --return GND --fmax 1G -o trace.lib
+
+# Standalone GUI (no KiCad needed)
+python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
+
+<h2 id="files">Files and saving</h2>
+<table>
+<thead><tr><th>File</th><th>What</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;board&gt;.current_sim.json</code></td><td>Scenario: one section per tool (stackup overrides, DC rows/elements/settings, extract ports, loop cells and baselines, matching network). Next to the board; safe to commit.</td></tr>
+<tr><td><code>results/*.npz</code> + <code>.json</code></td><td>Saved DC results, reopened by the viewer and the results browser.</td></tr>
+<tr><td><code>~/.config/pcb_current_sim/library.json</code></td><td>Your component library parts.</td></tr>
+<tr><td><code>switch_models.json</code> (next to the library)</td><td>Switching Loop device models saved by part number.</td></tr>
+<tr><td>Exports</td><td>PNG/SVG/PDF views and reports, CSV tables, interactive HTML, ParaView folders (<code>board.vtm</code>, <code>pulse.pvd</code>), SPICE <code>.lib</code>, Touchstone inputs.</td></tr>
+</tbody></table>
+
+<h2 id="trouble">Troubleshooting</h2>
+<details><summary>The toolbar buttons do not appear</summary>
+<ul><li>Preferences → Plugins → Enable KiCad API must be ticked; restart the PCB editor.</li>
+<li>The plugin must be in KiCad's <code>plugins/</code> folder (where <code>install.sh</code> puts it), not <code>scripting/plugins/</code> (old SWIG plugins only).</li>
+<li>The first start installs Python packages: give it network access and a minute. If the plugin's environment exists but has only pip, install the requirements into it by hand (see DEVELOPMENT.md).</li></ul></details>
+<details><summary>A button does nothing</summary>
+<p>The plugin failed to start; run the action script by hand with the plugin's Python to see the error. With
+<code>install.sh --link</code>, update to a version whose <code>_bootstrap.py</code> handles linked installs.</p></details>
+<details><summary>Results do not reflect my last edit</summary><p>The tools read the saved file: save, refill zones, then run (or use the window's save/refill buttons).</p></details>
+<details><summary>"Thermal runaway"</summary><p>The copper would exceed its melting point at this current: the result is real for the inputs. Check the current, the copper thickness and the ambient.</p></details>
+<details><summary>Switching Loop lowered the mesh cells</summary><p>The dense matrices must fit in 40 % of free memory; close other programs or accept the coarser mesh (adaptive meshing keeps most of the accuracy).</p></details>
+<details><summary>ngspice not available</summary><p>Vendor SPICE models need KiCad's bundled libngspice or an <code>ngspice</code> program; otherwise use the built-in simulator with datasheet values.</p></details>
+
+<h2 id="planned">Planned tools</h2>
+<ul>
+  <li><b>PDN (AC power integrity)</b>: Z(f) of a rail at its loads against a target impedance, decoupling capacitor table with mounting inductance, VRM model, plane resonances, what-if per capacitor.</li>
+  <li><b>SI &amp; Fields</b>: 2D cross-section solver for coupled lines and crosstalk, return-current paths, HV field and clearance.</li>
+  <li><b>3D extraction</b> (FastHenry / FastCap) and <b>full-wave</b> (openEMS) export.</li>
+  <li><b>Batch command line</b>: rerun the setups saved for a board after every change (from a Makefile, on save, from a git hook or in CI), with pass / fail checks (temperature, voltage at a load, loop inductance, matching yield…) and a report comparing with the previous run.</li>
+</ul>
+
+<h2 id="glossary">Glossary</h2>
+<dl class="kv">
+<b>C<sub>oss</sub>, C<sub>rss</sub>, C<sub>iss</sub></b><span>A MOSFET's output, reverse-transfer (Miller) and input capacitance from its datasheet.</span>
+<b>Commutation</b><span>The moment the current moves from one switch to the other.</span>
+<b>Common-source inductance</b><span>Inductance shared by the gate loop and the power loop; the power current's di/dt across it fights the gate drive.</span>
+<b>Cut-cell</b><span>A grid where each link conducts through the actual copper part of the cell face, so tracks at any angle are handled.</span>
+<b>Hot loop</b><span>The high-di/dt loop of a converter: hot-loop capacitor, both switches, return.</span>
+<b>Kelvin connection</b><span>A separate sense or drive connection that carries no load current.</span>
+<b>Kron reduction</b><span>Exact elimination of internal nodes of a network, keeping only the terminals.</span>
+<b>LISN</b><span>Line impedance stabilisation network: the 50 Ω measurement network in conducted EMI tests.</span>
+<b>PEEC</b><span>Partial-element equivalent circuit: the copper as resistors and partial (self and mutual) inductances.</span>
+<b>Port</b><span>A pad that becomes a terminal of an extracted model, measured against the reference.</span>
+<b>Q</b><span>Quality factor: how many cycles a ring lasts (about Q/π periods to fall to 1/e).</span>
+<b>Return loss</b><span>−20·log₁₀|Γ|: how much of the power is reflected; 10 dB = 10 % reflected.</span>
+<b>Snubber</b><span>An R-C across a switch that damps its ringing.</span>
+<b>Z₀</b><span>Characteristic impedance of a transmission line.</span>
+</dl>
+
+<p style="margin-top:3em; color:var(--mute); font-size:.88em">PCB Analysis Suite · GPL-3.0 · <a href="https://github.com/ShrinathN/kicad-analysis-suite">github.com/ShrinathN/kicad-analysis-suite</a> · This page is self-contained: no network access is needed to read it.</p>
+</main>
+</div>
+
+<script>
+"use strict";
+(function(){
+/* ---------- theme, navigation ---------- */
+const root = document.documentElement;
+const modes = ["auto", "light", "dark"];
+let mode = "auto";
+try { mode = localStorage.getItem("pas-theme") || "auto"; } catch (e) {}
+function applyTheme(){
+  if (mode === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", mode);
+  document.getElementById("themeBtn").textContent = "◐ " + (mode === "auto" ? "Auto" : mode === "light" ? "Light" : "Dark");
+  redrawAll();
+}
+document.getElementById("themeBtn").addEventListener("click", function(){
+  mode = modes[(modes.indexOf(mode) + 1) % 3];
+  try { localStorage.setItem("pas-theme", mode); } catch (e) {}
+  applyTheme();
+});
+if (window.matchMedia) {
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  if (mq.addEventListener) mq.addEventListener("change", function(){ if (mode === "auto") redrawAll(); });
+}
+const side = document.getElementById("side");
+document.getElementById("menuBtn").addEventListener("click", function(){ side.classList.toggle("open"); });
+side.addEventListener("click", function(e){ if (e.target.tagName === "A") side.classList.remove("open"); });
+const links = Array.prototype.slice.call(side.querySelectorAll("a[href^='#']"));
+const targets = links.map(function(a){ return document.getElementById(a.getAttribute("href").slice(1)); });
+function onScroll(){
+  let k = 0;
+  for (let i = 0; i < targets.length; i++) if (targets[i] && targets[i].getBoundingClientRect().top < 120) k = i;
+  links.forEach(function(a, i){ a.classList.toggle("on", i === k); });
+}
+window.addEventListener("scroll", onScroll, {passive: true});
+
+/* ---------- small plotting helper (canvas, no library) ---------- */
+function css(name){ return getComputedStyle(root).getPropertyValue(name).trim() || "#888"; }
+function niceTicks(a, b, n){
+  const span = b - a; if (!(span > 0)) return [a];
+  const step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(function(m){ return m * mag; }).find(function(s){ return s >= step0; });
+  const out = []; for (let v = Math.ceil(a / step) * step; v <= b + 1e-9 * span; v += step) out.push(+v.toFixed(12));
+  return out;
+}
+function fmtNum(v){
+  const a = Math.abs(v);
+  if (a >= 1e9) return (v / 1e9) + "G"; if (a >= 1e6) return (v / 1e6) + "M"; if (a >= 1e3) return (v / 1e3) + "k";
+  return String(+v.toPrecision(4));
+}
+function plot(cv, o){
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const L = 56, R = 12, T = 12, B = 38, pw = W - L - R, ph = H - T - B;
+  const X = o.x, Y = o.y;
+  const tx = X.log ? function(v){ return L + (Math.log10(v) - Math.log10(X.min)) / (Math.log10(X.max) - Math.log10(X.min)) * pw; }
+                   : function(v){ return L + (v - X.min) / (X.max - X.min) * pw; };
+  const ty = function(v){ return T + ph - (v - Y.min) / (Y.max - Y.min) * ph; };
+  g.font = "11px system-ui,sans-serif"; g.lineWidth = 1;
+  g.strokeStyle = css("--grid"); g.fillStyle = css("--ink2");
+  // grid + ticks
+  let xt;
+  if (X.log) { xt = []; for (let e = Math.floor(Math.log10(X.min)); e <= Math.ceil(Math.log10(X.max)); e++) { const v = Math.pow(10, e); if (v >= X.min && v <= X.max) xt.push(v); } }
+  else xt = niceTicks(X.min, X.max, 6);
+  g.textAlign = "center";
+  xt.forEach(function(v){ const x = tx(v); g.beginPath(); g.moveTo(x, T); g.lineTo(x, T + ph); g.stroke(); g.fillText((X.fmt || fmtNum)(v), x, T + ph + 14); });
+  g.textAlign = "right";
+  niceTicks(Y.min, Y.max, 5).forEach(function(v){ const y = ty(v); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(fmtNum(v), L - 5, y + 4); });
+  g.textAlign = "center"; g.fillText(X.label || "", L + pw / 2, H - 6);
+  g.save(); g.translate(13, T + ph / 2); g.rotate(-Math.PI / 2); g.fillText(Y.label || "", 0, 0); g.restore();
+  g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+  (o.bands || []).forEach(function(b){ g.fillStyle = b.color; g.globalAlpha = 0.12; g.fillRect(tx(b.x0), T, tx(b.x1) - tx(b.x0), ph); g.globalAlpha = 1; });
+  (o.series || []).forEach(function(s){
+    g.strokeStyle = s.color; g.fillStyle = s.color; g.lineWidth = s.width || 1.6; g.setLineDash(s.dash || []);
+    if (s.bars) {
+      for (let i = 0; i < s.x.length; i++) { const x0 = tx(s.x[i] - s.w / 2), x1 = tx(s.x[i] + s.w / 2); g.fillStyle = s.colors ? s.colors[i] : s.color; g.fillRect(x0, ty(s.y[i]), Math.max(x1 - x0 - 1, 1), ty(Y.min) - ty(s.y[i])); }
+      return;
+    }
+    g.beginPath(); let pen = false;
+    for (let i = 0; i < s.x.length; i++) {
+      const xv = s.x[i], yv = s.y[i];
+      if (!isFinite(yv) || (X.log && xv <= 0)) { pen = false; continue; }
+      const x = tx(xv), y = ty(Math.max(Math.min(yv, Y.max + (Y.max - Y.min)), Y.min - (Y.max - Y.min)));
+      if (pen) g.lineTo(x, y); else { g.moveTo(x, y); pen = true; }
+    }
+    g.stroke(); g.setLineDash([]);
+  });
+  (o.vlines || []).forEach(function(v){ g.strokeStyle = v.color; g.lineWidth = v.width || 1.2; g.setLineDash(v.dash || [4, 3]); g.beginPath(); g.moveTo(tx(v.x), T); g.lineTo(tx(v.x), T + ph); g.stroke(); g.setLineDash([]); });
+  (o.hlines || []).forEach(function(v){ g.strokeStyle = v.color; g.lineWidth = v.width || 1.2; g.setLineDash(v.dash || [4, 3]); g.beginPath(); g.moveTo(L, ty(v.y)); g.lineTo(L + pw, ty(v.y)); g.stroke(); g.setLineDash([]); });
+  (o.points || []).forEach(function(p){ g.fillStyle = p.color; g.beginPath(); g.arc(tx(p.x), ty(p.y), 4.5, 0, 2 * Math.PI); g.fill(); });
+  g.restore();
+  g.strokeStyle = css("--line"); g.lineWidth = 1; g.strokeRect(L, T, pw, ph);
+}
+
+/* ---------- widget plumbing ---------- */
+const widgets = [];
+function val(id){ const e = document.getElementById(id); return e.tagName === "SELECT" ? e.value : parseFloat(e.value); }
+function show(id, text){ const e = document.querySelector("[data-o='" + id + "']"); if (e) e.textContent = text; }
+function outs(id, items){
+  document.getElementById(id).innerHTML = items.map(function(it){ return "<div>" + it[0] + "<b>" + it[1] + "</b></div>"; }).join("");
+}
+function widget(ids, fn){
+  widgets.push(fn);
+  ids.forEach(function(id){ const e = document.getElementById(id); e.addEventListener("input", fn); e.addEventListener("change", fn); });
+}
+function redrawAll(){ widgets.forEach(function(f){ try { f(); } catch (e) { if (window.console) console.error(e); } }); }
+window.addEventListener("resize", function(){ clearTimeout(redrawAll.t); redrawAll.t = setTimeout(redrawAll, 120); });
+function si(v, unit, digits){
+  if (!isFinite(v)) return "–";
+  const p = [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"], [1e-12, "p"]];
+  const a = Math.abs(v);
+  for (let i = 0; i < p.length; i++) if (a >= p[i][0] * 0.9995 || i === p.length - 1) return (v / p[i][0]).toPrecision(digits || 3).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "") + " " + p[i][1] + unit;
+}
+
+/* ---------- 1. trace calculator (IPC-2221 and Onderdonk as the tool's tables) ---------- */
+const MIL2 = 0.0254 * 0.0254, T_MELT = 1083, RHO = 1.72e-8, ALPHA = 0.00393;
+function ipcRise(I, A, outer){ const k = outer ? 0.048 : 0.024; return Math.pow(I / (k * Math.pow(A / MIL2, 0.725)), 1 / 0.44); }
+function ipcI(dT, A, outer){ const k = outer ? 0.048 : 0.024; return k * Math.pow(dT, 0.44) * Math.pow(A / MIL2, 0.725); }
+function onderdonk(A, I, Ta){ const cmil = A / MIL2 * 4 / Math.PI; return Math.log10(1 + (T_MELT - Ta) / (234 + Ta)) * cmil * cmil / (33 * I * I); }
+widget(["tw", "tl", "ti", "tc", "tlay", "ta"], function(){
+  const w = val("tw"), l = val("tl"), I = val("ti"), t = parseFloat(val("tc")), outer = val("tlay") === "1", Ta = val("ta");
+  show("tw", w.toFixed(2) + " mm"); show("tl", l + " mm"); show("ti", I.toFixed(1) + " A"); show("ta", Ta + " °C");
+  const A = w * t / 1000;                                   // mm²
+  const R20 = RHO * l * 1e-3 / (A * 1e-6);
+  const dT = ipcRise(I, A, outer);
+  const RT = R20 * (1 + ALPHA * (Ta + dT - 20));
+  const tf = onderdonk(A, I, Ta);
+  outs("to", [["Cross-section", (A).toFixed(4) + " mm²"], ["R at 20 °C", si(R20, "Ω")], ["IPC-2221 rise", dT > 999 ? "> 999 K" : dT.toFixed(1) + " K"],
+    ["R at that temperature", si(RT, "Ω")], ["Voltage drop", si(I * RT, "V")], ["Loss", si(I * I * RT, "W") + " (" + si(I * I * RT / l, "W") + "/mm)"],
+    ["IPC current for 10 / 20 K", ipcI(10, A, outer).toFixed(2) + " / " + ipcI(20, A, outer).toFixed(2) + " A"],
+    ["Onderdonk fusing time", tf > 3600 ? "> 1 h" : si(tf, "s")]]);
+  const imax = Math.max(2 * I, ipcI(100, A, outer));
+  const xs = [], ys = []; for (let k = 1; k <= 160; k++) { const x = imax * k / 160; xs.push(x); ys.push(ipcRise(x, A, outer)); }
+  plot(document.getElementById("tplot"), {x: {min: 0, max: imax, label: "current [A]"}, y: {min: 0, max: Math.min(Math.max(dT * 1.6, 40), 300), label: "rise [K]"},
+    series: [{x: xs, y: ys, color: css("--c1")}], vlines: [{x: I, color: css("--c4")}], points: [{x: I, y: Math.min(dT, 299), color: css("--c4")}]});
+});
+
+/* ---------- 2. microstrip (Hammerstad-Jensen, zero thickness) ---------- */
+const C0 = 299792458;
+function hj(u, er){
+  const a = 1 + Math.log((Math.pow(u, 4) + Math.pow(u / 52, 2)) / (Math.pow(u, 4) + 0.432)) / 49 + Math.log(1 + Math.pow(u / 18.1, 3)) / 18.7;
+  const b = 0.564 * Math.pow((er - 0.9) / (er + 3), 0.053);
+  const ee = (er + 1) / 2 + (er - 1) / 2 * Math.pow(1 + 10 / u, -a * b);
+  const f = 6 + (2 * Math.PI - 6) * Math.exp(-Math.pow(30.666 / u, 0.7528));
+  const z0 = 60 * Math.log(f / u + Math.sqrt(1 + 4 / (u * u))) / Math.sqrt(ee);
+  return [z0, ee];
+}
+widget(["lw", "lh", "le", "ll", "lf", "lt"], function(){
+  const w = val("lw"), h = val("lh"), er = val("le"), len = val("ll"), fmax = Math.pow(10, val("lf")), t = parseFloat(val("lt"));
+  show("lw", w.toFixed(2) + " mm"); show("lh", h.toFixed(3) + " mm"); show("le", er.toFixed(2)); show("ll", len + " mm"); show("lf", si(fmax, "Hz"));
+  const r = hj(w / h, er), z0 = r[0], ee = r[1];
+  const Lp = z0 * Math.sqrt(ee) / C0, Cp = Math.sqrt(ee) / (z0 * C0);       // per metre
+  const lam = C0 / (fmax * Math.sqrt(ee)) * 1e3;                            // mm
+  let lo = 0.01, hi = 20; for (let i = 0; i < 60; i++) { const m = Math.sqrt(lo * hi); if (hj(m / h, er)[0] > 50) lo = m; else hi = m; }
+  const rdc = RHO / (w * 1e-3 * t * 1e-6) * 1e-3;                           // Ω/mm
+  outs("lo", [["Z₀", z0.toFixed(1) + " Ω"], ["ε_eff", ee.toFixed(3)], ["Delay", (Math.sqrt(ee) / C0 * 1e12 * 1e-3).toFixed(2) + " ps/mm"],
+    ["L′", (Lp * 1e9 * 1e-3).toFixed(3) + " nH/mm"], ["C′", (Cp * 1e12 * 1e-3).toFixed(3) + " pF/mm"], ["R′ (DC)", (rdc * 1e3).toFixed(2) + " mΩ/mm"],
+    ["Whole line", si(Lp * len * 1e-3, "H") + ", " + si(Cp * len * 1e-3, "F") + ", " + si(Math.sqrt(ee) / C0 * len * 1e-3, "s")],
+    ["Sections ≤ λ/10", Math.max(1, Math.ceil(len / (lam / 10))) + " (λ = " + lam.toFixed(0) + " mm)"], ["Width for 50 Ω", Math.sqrt(lo * hi).toFixed(3) + " mm"]]);
+  const xs = [], ys = []; for (let k = 0; k <= 160; k++) { const x = 0.05 * Math.pow(100, k / 160); xs.push(x); ys.push(hj(x / h, er)[0]); }
+  plot(document.getElementById("lplot"), {x: {min: 0.05, max: 5, log: true, label: "width [mm]", fmt: function(v){ return String(v); }}, y: {min: 0, max: 160, label: "Z₀ [Ω]"},
+    series: [{x: xs, y: ys, color: css("--c1")}], hlines: [{y: 50, color: css("--c3")}], points: [{x: w, y: z0, color: css("--c4")}]});
+});
+
+/* ---------- 3. snubber (the tool's lumped turn-off model, trapezoidal integration) ---------- */
+function inv(M){
+  const n = M.length, A = M.map(function(r, i){ return r.concat(Array.from({length: n}, function(_, j){ return i === j ? 1 : 0; })); });
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    const t = A[c]; A[c] = A[p]; A[p] = t;
+    const d = A[c][c]; for (let j = 0; j < 2 * n; j++) A[c][j] /= d;
+    for (let r = 0; r < n; r++) if (r !== c) { const f = A[r][c]; for (let j = 0; j < 2 * n; j++) A[r][j] -= f * A[c][j]; }
+  }
+  return A.map(function(r){ return r.slice(n); });
+}
+function mv(M, x){ return M.map(function(r){ return r.reduce(function(s, v, j){ return s + v * x[j]; }, 0); }); }
+function response(L, R, C, V, I, didt, snub, tEnd, n){
+  const f0 = 1 / (2 * Math.PI * Math.sqrt(L * C)), tf = I / didt;
+  tEnd = tEnd || tf + 12 / f0; n = n || 2500;
+  const h = tEnd / n;
+  let A, x;
+  if (snub) {
+    const rs = snub[0], cs = snub[1], esl = Math.max(snub[2], 1e-13);
+    A = [[-R / L, -1 / L, 0, 0], [1 / C, 0, -1 / C, 0], [0, 1 / esl, -rs / esl, -1 / esl], [0, 0, 1 / cs, 0]];
+    x = [I, V, 0, V];
+  } else { A = [[-R / L, -1 / L], [1 / C, 0]]; x = [I, V]; }
+  const m = x.length;
+  const Mi = inv(A.map(function(r, i){ return r.map(function(v, j){ return (i === j ? 1 : 0) - h / 2 * v; }); }));
+  const Mp = A.map(function(r, i){ return r.map(function(v, j){ return (i === j ? 1 : 0) + h / 2 * v; }); });
+  const ich = function(t){ return I * Math.min(Math.max(1 - t / tf, 0), 1); };
+  const ts = [0], vs = [V];
+  for (let k = 0; k < n; k++) {
+    const u = new Array(m).fill(0); u[0] = V / L; u[1] = -(ich(k * h) + ich((k + 1) * h)) / 2 / C;
+    const y = mv(Mp, x); for (let i = 0; i < m; i++) y[i] += h * u[i];
+    x = mv(Mi, y); ts.push((k + 1) * h); vs.push(x[1]);
+  }
+  return [ts, vs, tEnd];
+}
+function settle(t, v, V){ let k = -1; for (let i = 0; i < v.length; i++) if (Math.abs(v[i] - V) > 0.05 * V) k = i; return k < 0 ? 0 : t[k]; }
+widget(["sL", "sC", "sR", "sV", "sI", "sD", "sRs", "sCs", "sE", "sF"], function(){
+  const L = val("sL") * 1e-9, C = val("sC") * 1e-12, R = val("sR") * 1e-3, V = val("sV"), I = val("sI"), didt = val("sD") * 1e9;
+  const rs = Math.pow(10, val("sRs")), cs = val("sCs") * 1e-12, esl = val("sE") * 1e-9, fsw = val("sF") * 1e3;
+  show("sL", val("sL").toFixed(1) + " nH"); show("sC", val("sC") + " pF"); show("sR", val("sR") + " mΩ"); show("sV", V + " V"); show("sI", I + " A");
+  show("sD", val("sD").toFixed(1) + " A/ns"); show("sRs", si(rs, "Ω")); show("sCs", cs > 0 ? si(cs, "F") : "none"); show("sE", val("sE").toFixed(1) + " nH"); show("sF", si(fsw, "Hz"));
+  const a = response(L, R, C, V, I, didt, null);
+  const b = cs > 0 ? response(L, R, C, V, I, didt, [rs, cs, esl], a[2]) : a;
+  const pk0 = Math.max.apply(null, a[1]), pk1 = Math.max.apply(null, b[1]);
+  const z0 = Math.sqrt(L / C), f0 = 1 / (2 * Math.PI * Math.sqrt(L * C));
+  outs("so", [["Ring (no snubber)", si(f0, "Hz") + ", Q " + (z0 / R).toFixed(1)], ["√(L/C_par)", z0.toFixed(2) + " Ω"],
+    ["Peak, no snubber", pk0.toFixed(1) + " V (+" + (pk0 - V).toFixed(1) + ")"], ["Peak, with it", pk1.toFixed(1) + " V (+" + (pk1 - V).toFixed(1) + ")"],
+    ["Ring lasts", (settle(a[0], a[1], V) * 1e9).toFixed(0) + " → " + (settle(b[0], b[1], V) * 1e9).toFixed(0) + " ns"],
+    ["L·di/dt", (L * didt).toFixed(1) + " V"], ["Snubber loss C_s V² f_sw", si(cs * V * V * fsw, "W")], ["C_s / C_par", (cs / C).toFixed(1)]]);
+  const ser = [{x: a[0].map(function(t){ return t * 1e9; }), y: a[1], color: css("--mute"), width: 1.2}];
+  if (cs > 0) ser.push({x: b[0].map(function(t){ return t * 1e9; }), y: b[1], color: css("--c1"), width: 1.8});
+  const lo = Math.min(Math.min.apply(null, a[1]), 0), hi = Math.max(pk0, pk1) * 1.08;
+  plot(document.getElementById("splot"), {x: {min: 0, max: a[2] * 1e9, label: "time after the current starts to fall [ns]"}, y: {min: lo, max: hi, label: "V across the switch [V]"},
+    series: ser, hlines: [{y: V, color: css("--c3")}]});
+});
+document.getElementById("sSug").addEventListener("click", function(){
+  const L = val("sL") * 1e-9, C = val("sC") * 1e-12, z0 = Math.sqrt(L / C);
+  document.getElementById("sRs").value = Math.log10(z0).toFixed(2);
+  document.getElementById("sCs").value = Math.min(10000, Math.round(3 * val("sC") / 50) * 50);
+  redrawAll();
+});
+
+/* ---------- 4. spectrum: trapezoid + damped ring after each edge ---------- */
+function sincpi(x){ return Math.abs(x) < 1e-12 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x); }
+widget(["eV", "eF", "eD", "eT", "eR", "eA", "eQ"], function(){
+  const V = val("eV"), fsw = val("eF") * 1e3, d = val("eD"), tr = val("eT") * 1e-9, fr = val("eR") * 1e6, ar = val("eA"), Q = val("eQ");
+  show("eV", V + " V"); show("eF", si(fsw, "Hz")); show("eD", d.toFixed(2)); show("eT", val("eT").toFixed(1) + " ns"); show("eR", si(fr, "Hz"));
+  show("eA", Math.round(ar * 100) + " % of V"); show("eQ", Q.toFixed(1));
+  const T = 1 / fsw, N = Math.min(Math.floor(1e9 / fsw), 40000), wr = 2 * Math.PI * fr, al = wr / (2 * Q);
+  const f = [], db = [], env = [];
+  const t0 = tr, t1 = d * T + tr;
+  for (let n = 1; n <= N; n++) {
+    const w = 2 * Math.PI * n * fsw;
+    const mag = V * d * sincpi(n * d) * sincpi(n * tr / T), ph = -Math.PI * n * (d + tr / T);
+    let re = mag * Math.cos(ph), im = mag * Math.sin(ph);
+    if (ar > 0) {   // ring a·V·e^(-αt)·sin(ωr t) after the rise, minus the same after the fall
+      const dr = al * al - w * w + wr * wr, di = 2 * al * w;             // (α + jω)² + ωr²
+      const den = dr * dr + di * di, kr = ar * V * wr / T * dr / den, ki = -ar * V * wr / T * di / den;
+      [[t0, 1], [t1, -1]].forEach(function(p){ const c = Math.cos(w * p[0]), s = -Math.sin(w * p[0]); re += p[1] * (kr * c - ki * s); im += p[1] * (kr * s + ki * c); });
+    }
+    const amp = 2 * Math.hypot(re, im);
+    f.push(n * fsw); db.push(20 * Math.log10(Math.max(amp / Math.SQRT2, 1e-12) / 1e-6));
+    env.push(20 * Math.log10(2 * V * d * Math.min(1, 1 / (Math.PI * n * fsw * d * T)) * Math.min(1, 1 / (Math.PI * n * fsw * tr)) / Math.SQRT2 / 1e-6));
+  }
+  const at = function(fq){     // highest harmonic within ±10 % (a single one may sit on a null of the spectrum)
+    let m = -Infinity; for (let k = 0; k < N; k++) if (f[k] >= 0.9 * fq && f[k] <= 1.1 * fq) m = Math.max(m, db[k]);
+    return isFinite(m) ? m : db[Math.min(Math.max(Math.round(fq / fsw) - 1, 0), N - 1)]; };
+  const kr = Math.round(fr / fsw) - 1;
+  let bump = -Infinity; for (let k = Math.max(kr - 3, 0); k <= Math.min(kr + 3, N - 1); k++) bump = Math.max(bump, db[k] - env[k]);
+  outs("eo", [["First corner 1/(π d T)", si(1 / (Math.PI * d * T), "Hz")], ["Second corner 1/(π t_r)", si(1 / (Math.PI * tr), "Hz")],
+    ["Fundamental", db[0].toFixed(1) + " dBµV"], ["Around 30 MHz", at(30e6).toFixed(1) + " dBµV"], ["Around 100 MHz", at(100e6).toFixed(1) + " dBµV"],
+    ["Ring above the envelope", ar > 0 && isFinite(bump) ? bump.toFixed(1) + " dB" : "–"]]);
+  const top = Math.max.apply(null, db) + 5;
+  plot(document.getElementById("eplot"), {x: {min: fsw, max: Math.max(1e9, fsw * 2), log: true, label: "frequency [Hz]"}, y: {min: top - 110, max: top, label: "dBµV"},
+    series: [{x: f, y: db, color: css("--c1"), width: 1}, {x: f, y: env, color: css("--mute"), width: 1.4, dash: [5, 4]}], vlines: [{x: fr, color: css("--c4")}]});
+});
+
+/* ---------- 5. L-match Monte Carlo ---------- */
+function rng(seed){ let s = seed >>> 0; return function(){ s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+widget(["mR", "mX", "mLt", "mCt", "mLs", "mDi", "mS"], function(){
+  const RL = val("mR"), LL = val("mX") * 1e-9, ltol = val("mLt") / 100, ctol = parseFloat(val("mCt")) * 1e-12, ls = val("mLs") / 100, gauss = val("mDi") === "g", spec = val("mS");
+  show("mR", RL + " Ω"); show("mX", val("mX").toFixed(2) + " nH"); show("mLt", "±" + val("mLt") + " %"); show("mLs", "±" + val("mLs") + " %"); show("mS", spec + " dB");
+  const f0 = 2.44175e9, w0 = 2 * Math.PI * f0, Rs = 50;
+  const Q = Math.sqrt(Rs / RL - 1), Xs = Q * RL - w0 * LL, Cp = Q / Rs / w0;
+  const seriesL = Xs >= 0, Lser = Xs / w0, Cser = 1 / (w0 * Math.max(-Xs, 1e-9));
+  const band = [2.400e9, 2.42e9, 2.44e9, 2.46e9, 2.4835e9];
+  const rand = rng(12345), u = function(){ if (!gauss) return 2 * rand() - 1; let z; do { z = Math.sqrt(-2 * Math.log(rand() + 1e-12)) * Math.cos(2 * Math.PI * rand()) / 3; } while (Math.abs(z) > 1); return z; };
+  function worstRL(rl, ll, ser, cp){
+    let worst = Infinity;
+    band.forEach(function(f){
+      const w = 2 * Math.PI * f;
+      let zr = rl, zi = w * ll + (seriesL ? w * ser : -1 / (w * ser));            // load + series element
+      const yb = w * cp; const d = zr * zr + zi * zi; let yr = zr / d, yi = -zi / d + yb;   // shunt C at the source side
+      const e = yr * yr + yi * yi; const Zr = yr / e, Zi = -yi / e;
+      const nr = Zr - Rs, ni = Zi, dr = Zr + Rs, di = Zi;
+      const g = Math.sqrt((nr * nr + ni * ni) / (dr * dr + di * di));
+      worst = Math.min(worst, -20 * Math.log10(Math.max(g, 1e-9)));
+    });
+    return worst;
+  }
+  const nom = worstRL(RL, LL, seriesL ? Lser : Cser, Cp);
+  const S = 4000, res = [];
+  for (let i = 0; i < S; i++) {
+    const ser = seriesL ? Lser * (1 + ltol * u()) : Math.max(Cser + ctol * u(), 0.05e-12);
+    res.push(worstRL(RL * (1 + ls * u()), LL * (1 + ls * u()), ser, Math.max(Cp + ctol * u(), 0.05e-12)));
+  }
+  const pass = res.filter(function(r){ return r >= spec; }).length;
+  const sorted = res.slice().sort(function(a, b){ return a - b; });
+  outs("mo", [["Shunt C (source side)", si(Cp, "F")], [seriesL ? "Series L (to the load)" : "Series C (to the load)", seriesL ? si(Lser, "H") : si(Cser, "F")],
+    ["Network Q", Q.toFixed(2)], ["Nominal worst in band", nom.toFixed(1) + " dB"], ["Yield", (100 * pass / S).toFixed(1) + " %"], ["5 % of builds below", sorted[Math.floor(0.05 * S)].toFixed(1) + " dB"]]);
+  const bw = 0.5, nb = 80, cnt = new Array(nb).fill(0);
+  res.forEach(function(r){ cnt[Math.min(Math.floor(Math.max(r, 0) / bw), nb - 1)]++; });
+  const xs = cnt.map(function(_, k){ return (k + 0.5) * bw; });
+  const cols = xs.map(function(x){ return x >= spec ? css("--c1") : css("--c4"); });
+  plot(document.getElementById("mplot"), {x: {min: 0, max: 40, label: "worst return loss in 2.400–2.4835 GHz [dB]"}, y: {min: 0, max: Math.max.apply(null, cnt) * 1.1 || 1, label: "builds"},
+    series: [{x: xs, y: cnt, bars: true, w: bw, colors: cols, color: css("--c1")}], vlines: [{x: spec, color: css("--c3"), dash: []}]});
+});
+
+applyTheme();
+onScroll();
+})();
+</script>
+</body>
+</html>

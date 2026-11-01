@@ -2,8 +2,8 @@
 
 **PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has four tools so far:
 
-- **DC & Thermal**: current density, IR drop and temperature on a real board, including resistance elements, current pulses (fusing) and magnetic field maps.
-- **Switching Loop**: the hot loop and gate loops of a switching power stage (buck, boost, half-bridge): loop inductance and where it sits, ringing frequency, gate-loop and common-source inductance, from a partial-inductance (PEEC) solve of the layout.
+- **DC & Thermal**: current density, IR drop and temperature on a real board, including resistance elements, linear and switching regulators (with their losses and junction temperature), current pulses (fusing) and magnetic field maps.
+- **Switching Loop**: the hot loop and gate loops of a switching power stage (buck, boost, half-bridge, 4-switch buck-boost; synchronous or with a diode): loop inductance and where it sits, ringing frequency, gate-loop and common-source inductance, from a partial-inductance (PEEC) solve of the layout; switching edges in time, a snubber designer and an EMI estimate.
 - **Trace R/L/C → SPICE**: R, L, C, Z₀ and delay of the copper between any pads, from a 2D field solve of each cross-section, exported as a SPICE RLC subcircuit.
 - **Matching & Tolerance**: draw an RF matching network with real parts, then see whether it still meets its specs across part tolerances.
 
@@ -56,7 +56,7 @@ Pick two or more pads on one net and the return nets. The tool follows the coppe
 - Resistors, diodes, capacitors and inductors between any two pads, also across nets (trace → part → trace), with return-net pads as the reference.
 - Outputs: per-path totals, a segment table with Z₀ and the return found, the path coloured by Z₀ with impedance steps marked, a drawn schematic of the ladder, and a `.subckt` of plain R, L and C that runs in any SPICE.
 
-The example below is a battery boost converter's input path: from the battery terminal H5 through the BAT_P pour, the inductor L1 (added as an element) and the switch-node pour to the FET Q3, over a BAT_N plane on a 2-layer board. Its input capacitors are elements to BAT_N.
+The example below is a DC-DC converter's input path on a 2-layer board: from the input connector through a supply pour, the inductor (added as an element) and the switch-node pour to the switch, over a ground plane. The input capacitors are capacitor elements to ground.
 
 | | |
 |---|---|
@@ -107,6 +107,7 @@ python3 -m pcb_current_sim board.kicad_pcb --row "J1.2>J2.2:3" --out results   #
 
 ## Documentation
 
+- [Documentation (HTML)](docs/index.html): what each tool does, how it works, its limits, interactive calculators and realistic use cases for every tool. Open the file in any browser; it needs no network.
 - [User guide](docs/USER_GUIDE.md): every tool and option, the physical models, outputs and the CLI.
 - [Development](docs/DEVELOPMENT.md): environment, tests, smoke tests, screenshots and code layout.
 - [Roadmap](docs/ROADMAP.md): the plan for the remaining tools.

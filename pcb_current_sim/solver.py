@@ -6,6 +6,10 @@ at its source super-node and -I at its sink; all rows are solved together.
 Lumped elements (resistors, user-defined resistances, constant drops) join
 two pad electrodes, possibly on different nets.  Constant-drop elements are
 one-way (diodes): solve() iterates their on/off states until consistent.
+Regulators (three pads: IN, OUT, GND) hold OUT - GND with a Norton source and draw their input
+current from IN to GND; that current depends on the solution (I_out, V_in), so each solve adds one
+unit-sink column per regulator and settles the input currents on that small system (no extra
+factorisation).  An LDO below its dropout is a constant drop IN -> OUT instead.
 """
 import math
 import time
@@ -28,6 +32,13 @@ PULSE_FRAMES = 20       # pulse: temperature snapshots kept for animation
 
 class SimError(Exception):
     pass
+
+
+class _Named:
+    """Stands in for a Row in connectivity messages (a regulator's input / output)."""
+
+    def __init__(self, name):
+        self.name = name
 
 
 G_SOURCE = 1e6          # S, Norton conductance of a voltage source (10 A -> 10 µV error)
@@ -93,6 +104,7 @@ class Settings:
     pulse_ms: float = 10.0          # pulse length
     pulse_from_steady: bool = False  # start from the steady state at the table values (else ambient)
     pulse_steps: int = 50
+    part_heat: list = field(default_factory=list)   # [{"ref", "W", "note"}]: heat spread over a part's pads
 
 
 _ALL, _LO, _HI = slice(None), slice(0, -1), slice(1, None)
@@ -149,9 +161,16 @@ class Network:
         self.el_on = np.ones(len(self.elements), bool)      # conduction state (diodes may switch off)
         self.el_Vf = np.array([e.Vf if e.model == "V" else 0.0 for e in self.elements])
         self.el_oneway = np.array([e.model == "V" for e in self.elements], bool)
+        self.reg = [k for k, e in enumerate(self.elements) if e.regulator]
+        self.reg_drop = np.zeros(len(self.elements), bool)    # LDO in dropout (a constant drop IN -> OUT)
+        self.gnode = {}                                       # regulator -> its GND electrode
         for k, e in enumerate(self.elements):
             self.enodes.append(tuple(self._electrode([pid], f"Element {e.name}", (("el", k), pin), self.xlinks)
                                      for pin, pid in (("a", e.a), ("b", e.b))))
+            if e.regulator:
+                if not e.g:
+                    raise SimError(f"Regulator {e.name}: no GND pad given.")
+                self.gnode[k] = self._electrode([e.g], f"Regulator {e.name}", (("el", k), "g"), self.xlinks)
 
     def _electrode(self, ids, what, tag, out):
         """New super-node tied to the copper of pads `ids`; returns its node."""
@@ -203,37 +222,93 @@ class Network:
                 base[src] += v
                 base[snk] -= v
         pairs = [(row, src, snk) for (src, snk), row in zip(self.super, self.rows)]
+        for k in self.reg:              # a regulator's input and output must reach its GND pin
+            e, (a, b), g = self.elements[k], self.enodes[k], self.gnode[k]
+            pairs += [(_Named(f"{e.name} (regulator input)"), a, g), (_Named(f"{e.name} (regulator output)"), b, g)]
         seen = set()
         while True:
             asm = self._assemble(T)
             rhs = base.copy()
-            for (a, b), G, vf in zip(self.enodes, asm["G_el"], self.el_Vf):
+            for (a, b), G, vf in zip(self.enodes, asm["G_el"], asm["Vf_el"]):
                 rhs[a] += G * vf
                 rhs[b] -= G * vf
+            for k in self.reg:
+                if asm["G_reg"][k]:
+                    rhs[self.enodes[k][1]] += self.elements[k].Vout * G_SOURCE
+                    rhs[self.gnode[k]] -= self.elements[k].Vout * G_SOURCE
+            cols = [rhs]
+            for k in self.reg:          # unit input current: out of IN, back in at GND
+                u = np.zeros(self.n)
+                u[self.enodes[k][0]], u[self.gnode[k]] = -1.0, 1.0
+                cols.append(u)
             try:
-                V = self._solve_system(asm["A"], asm["off"], rhs[:, None], pairs)[:, 0]
+                Vs = self._solve_system(asm["A"], asm["off"], np.column_stack(cols), pairs)
             except SimError as e:
                 off = [el.name for el, on in zip(self.elements, self.el_on) if not on]
                 if off:
                     raise SimError(f"{e} Blocking diode element(s): {', '.join(off)} (check their direction: "
                                    "pad A is the anode).") from None
                 raise
-            if not self.el_oneway.any():
+            V = Vs[:, 0]
+            if self.reg:
+                x = self._reg_inputs(Vs, asm)
+                V = Vs[:, 0] + Vs[:, 1:] @ x
+                asm["reg_x"] = dict(zip(self.reg, x))
+            if not (self.el_oneway.any() or self.reg):
                 break
-            seen.add(self.el_on.tobytes())
+            seen.add(self.el_on.tobytes() + self.reg_drop.tobytes())
             a = np.array([p for p, _ in self.enodes], np.int64)
             b = np.array([q for _, q in self.enodes], np.int64)
             fwd = V[a] - V[b] - self.el_Vf                    # NaN where a side is unexcited
             new = self.el_on.copy()
             new[self.el_oneway & self.el_on & ~(fwd >= -1e-12)] = False
             new[self.el_oneway & ~self.el_on & (fwd > 1e-12)] = True
-            if (new == self.el_on).all():
+            drop = self.reg_drop.copy()
+            for k in self.reg:
+                e, g = self.elements[k], self.gnode[k]
+                if e.model != "LDO":
+                    continue
+                if not drop[k] and V[a[k]] - V[b[k]] < e.Vf - 1e-9:
+                    drop[k] = True              # not enough headroom: the pass device is fully on
+                elif drop[k] and V[b[k]] - V[g] > e.Vout + 1e-9:
+                    drop[k] = False             # enough input again: it regulates
+            if (new == self.el_on).all() and (drop == self.reg_drop).all():
                 break
-            self.el_on = new
-            if new.tobytes() in seen:
-                self.R.warnings.append("Diode element states did not settle (oscillating); result may be off.")
+            self.el_on, self.reg_drop = new, drop
+            if new.tobytes() + drop.tobytes() in seen:
+                self.R.warnings.append("Diode / regulator states did not settle (oscillating); result may be off.")
                 break
         return self._post(V, T, asm)
+
+    def _reg_inputs(self, Vs, asm):
+        """Regulator input currents x (A, IN -> GND) consistent with V = V0 + U x: an LDO draws
+        I_out + Iq, a switching regulator V_out I_out / (eta V_in) + Iq.  Fixed point on the small
+        system (the regulators couple only through shared copper)."""
+        V0, U = Vs[:, 0], Vs[:, 1:]
+        a = np.array([self.enodes[k][0] for k in self.reg])
+        b = np.array([self.enodes[k][1] for k in self.reg])
+        g = np.array([self.gnode[k] for k in self.reg])
+        els = [self.elements[k] for k in self.reg]
+        Iq = np.array([e.Iq for e in els])
+        x = Iq.copy()
+        for it in range(200):
+            V_in = np.nan_to_num(V0[a] - V0[g] + (U[a] - U[g]) @ x)
+            V_o = np.nan_to_num(V0[b] - V0[g] + (U[b] - U[g]) @ x)
+            new = np.empty_like(x)
+            for i, (k, e) in enumerate(zip(self.reg, els)):
+                I_out = asm["G_reg"][k] * (e.Vout - V_o[i])
+                if e.model == "LDO":
+                    new[i] = Iq[i] + (I_out if not self.reg_drop[k] else 0.0)    # in dropout the drop element carries it
+                elif V_in[i] > 0.05 * max(e.Vout, 0.1):
+                    new[i] = Iq[i] + max(V_o[i] * I_out, 0.0) / (max(e.eta, 0.05) * V_in[i])
+                else:
+                    new[i] = Iq[i]
+            if np.all(np.abs(new - x) <= 1e-9 + 1e-7 * np.abs(new)):
+                return new
+            x = new
+        self.R.warnings.append("Regulator input currents did not settle: the input copper may be too resistive "
+                               "for the power drawn (the input collapses).")
+        return x
 
     def solve_unit_rows(self, T=None):
         """One light Solution per row carrying 1 A around that row's own loop, all other
@@ -317,8 +392,16 @@ class Network:
             e = np.array([(sn, nd, gg) for sn, nd, gg, *_ in self.elinks + self.xlinks])
             A_i.append(e[:, 0].astype(np.int64)); A_j.append(e[:, 1].astype(np.int64)); A_g.append(e[:, 2])
         # DC limit of reactive elements: a capacitor is open, an inductor an ideal link
-        G_el = np.array([0.0 if (not on or e.model == "C") else 1 / (EL.R_MIN if e.model == "L" else max(e.R, EL.R_MIN))
-                         for e, on in zip(self.elements, self.el_on)])
+        G_el = np.array([0.0 if (not on or e.model in ("C", "SMPS") or (e.model == "LDO" and not drop))
+                         else 1 / (EL.R_MIN if e.model == "L" else max(e.R, EL.R_MIN))
+                         for e, on, drop in zip(self.elements, self.el_on, self.reg_drop)])
+        Vf_el = np.where(self.reg_drop, [e.Vf for e in self.elements], self.el_Vf) if self.elements else self.el_Vf
+        # regulating regulators: a Norton source OUT - GND
+        G_reg = {k: (0.0 if self.reg_drop[k] else G_SOURCE) for k in self.reg}
+        for k, gk in G_reg.items():
+            if gk:
+                A_i.append(np.array([self.enodes[k][1]])); A_j.append(np.array([self.gnode[k]]))
+                A_g.append(np.array([gk]))
         on = np.flatnonzero(G_el)
         if on.size:
             A_i.append(np.array([self.enodes[k][0] for k in on])); A_j.append(np.array([self.enodes[k][1] for k in on]))
@@ -336,7 +419,7 @@ class Network:
         off = (off + off.T).tocsr()
         A = (sp.diags(np.asarray(off.sum(1)).ravel()) - off).tocsr()
         return dict(A=A, off=off, links=links, ring_links=ring_links, barrel_links=barrel_links,
-                    G_el=G_el, Vf_el=self.el_Vf, Gs=Gs)
+                    G_el=G_el, Vf_el=Vf_el, Gs=Gs, G_reg=G_reg)
 
     def _solve_system(self, A, off, rhs, pairs, strict=True):
         """Solve A V = rhs (columns) with one grounded node per excited component.
@@ -347,6 +430,15 @@ class Network:
             if lab[src] != lab[snk]:
                 if not strict:
                     continue
+                between = [self.elements[k].name for k in getattr(self, "reg", ())
+                           if {lab[self.enodes[k][0]], lab[self.enodes[k][1]]} == {lab[src], lab[snk]}]
+                if between:
+                    raise SimError(
+                        f"Row '{row.name}': regulator {', '.join(between)} sits between its source and sink. A "
+                        "regulator does not conduct from IN to OUT: it makes its own output voltage, so a current "
+                        "path cannot run through it. Use a voltage source row on the supply (for example a battery's "
+                        "+ and − pads) and a load row from the powered pins to ground; the regulator then draws its "
+                        "input current from the source by itself.")
                 raise SimError(f"Row '{row.name}': source and sink are not connected by copper or "
                                "resistance elements (open circuit; save and refill zones in KiCad, or add "
                                "the part in the path as an element).")
@@ -422,9 +514,20 @@ class Network:
         if self._pk:
             I = np.bincount(self._pidx, self._pg * np.nan_to_num(V[self._psn] - V[self._pnd]), len(self._pk))
             sol.pad_current = dict(zip(self._pk, I.tolist()))
-        for (a, b), G, vf in zip(self.enodes, asm["G_el"], asm["Vf_el"]):
+        for k, ((a, b), G, vf) in enumerate(zip(self.enodes, asm["G_el"], asm["Vf_el"])):
             dV = float(np.nan_to_num(V[a] - V[b]))
-            sol.element_I.append(G * (dV - vf))
+            I = G * (dV - vf)
+            if k in self.gnode:
+                e, g = self.elements[k], self.gnode[k]
+                V_in, V_o = float(np.nan_to_num(V[a] - V[g])), float(np.nan_to_num(V[b] - V[g]))
+                # unit-row solves (light) have every source off: the regulator is then a short OUT - GND
+                I_out = I + asm["G_reg"][k] * ((0.0 if light else e.Vout) - V_o)
+                I_in = asm.get("reg_x", {}).get(k, 0.0) + (I if self.reg_drop[k] else 0.0)
+                I_out, I_in = float(I_out), float(I_in)
+                sol.reg[k] = dict(V_in=V_in, V_out=V_o, I_in=I_in, I_out=I_out, P=V_in * I_in - V_o * I_out,
+                                  dropout=bool(self.reg_drop[k]))
+                I = I_out
+            sol.element_I.append(I)
             sol.element_dV.append(dV)
         return sol
 
@@ -444,6 +547,7 @@ class Solution:
     barrel_links: list = field(default_factory=list)
     element_I: list = field(default_factory=list)      # A, pad a -> pad b
     element_dV: list = field(default_factory=list)     # V_a - V_b
+    reg: dict = field(default_factory=dict)            # element index -> V_in, V_out, I_in, I_out, P, dropout
 
     def J(self, L):
         return np.hypot(self.Jx[L], self.Jy[L])
@@ -461,8 +565,12 @@ class Solution:
         area on the component side."""
         board, out = net.board, []
         side = {fp.ref: fp.layer for fp in board.footprints}
-        for e, I, dV in zip(net.elements, self.element_I, self.element_dV):
+        regs = []
+        for k, (e, I, dV) in enumerate(zip(net.elements, self.element_I, self.element_dV)):
             if not e.heats:
+                continue
+            if k in self.reg:           # a regulator's loss: over all its pads, by area (the tab takes most)
+                regs.append(dict(ref=board.pads_by_id(e.a)[0].ref, W=max(self.reg[k]["P"], 0.0)))
                 continue
             for pid in (e.a, e.b):
                 p = board.pads_by_id(pid)[0]
@@ -470,7 +578,38 @@ class Solution:
                 if L not in p.layers:
                     L = p.layers[0]
                 out.append((p.pos[0], p.pos[1], L, abs(I * dV) / 2, p.geom))
-        return out
+        return out + part_heat(board, regs) + part_heat(board, net.s.part_heat)
+
+
+def part_heat(board, items):
+    """[(x, y, layer, W, pad geometry)]: heat given per part (its losses: a switch, a regulator),
+    shared among its pads by area on the component side."""
+    side = {fp.ref: fp.layer for fp in board.footprints}
+    out = []
+    for it in items or ():
+        w = float(it.get("W", 0.0))
+        # copper pads only: a footprint may hold pads with no copper layer (paste or mask only)
+        pads = [p for p in board.pads if p.ref == it.get("ref") and p.geom is not None and p.layers]
+        if w <= 0 or not pads:
+            continue
+        area = [max((p.geom.bbox[2] - p.geom.bbox[0]) * (p.geom.bbox[3] - p.geom.bbox[1]), 1e-6) for p in pads]
+        tot = sum(area)
+        for p, a in zip(pads, area):
+            L = side.get(p.ref, p.layers[0])
+            if L not in p.layers:
+                L = p.layers[0]
+            out.append((p.pos[0], p.pos[1], L, w * a / tot, p.geom))
+    return out
+
+
+def part_heat_box(board, items, box):
+    """box grown to hold the pads of the parts given heat (their heat would fall off the thermal grid)."""
+    pads = [p.geom.bbox for it in items or () for p in board.pads
+            if p.ref == it.get("ref") and p.geom is not None and p.layers and float(it.get("W", 0.0)) > 0]
+    if box is None or not pads:
+        return box
+    return (min([box[0]] + [b[0] - 2 for b in pads]), min([box[1]] + [b[1] - 2 for b in pads]),
+            max([box[2]] + [b[2] + 2 for b in pads]), max([box[3]] + [b[3] + 2 for b in pads]))
 
 
 # ---------------------------------------------------------------------------
@@ -637,8 +776,16 @@ def simulate(board, rows, settings=None, progress=print, elements=None):
         tm, hit = cached(kind, board, (astuple(grid), bbox, tpitch) + th_keys,
                          lambda: ThermalModel(board, grid, thick, s, bbox=bbox, pitch=tpitch))
         return tm.reset(s)
-    f_tm = pool.submit(thermal_model, "thermal", thermal_box(board, box, s), s.thermal_pitch or None) \
-        if s.thermal else None
+    f_tm = pool.submit(thermal_model, "thermal", thermal_box(board, part_heat_box(board, s.part_heat, box), s),
+                       s.thermal_pitch or None) if s.thermal else None
+    gone = [it.get("ref") for it in s.part_heat if not any(p.ref == it.get("ref") for p in board.pads)]
+    if gone:
+        R.warnings.append("Heat at parts not on the board (left out): " + ", ".join(map(str, gone)))
+    regs = {board.pads_by_id(e.a)[0].ref for e in els if e.regulator and e.heats and board.pads_by_id(e.a)}
+    twice = sorted({it.get("ref") for it in s.part_heat if float(it.get("W", 0.0)) > 0} & regs)
+    if twice:
+        R.warnings.append(f"Heated twice: {', '.join(twice)} is a regulator element (its loss heats its pads) and "
+                          "also has an entry under 'Heat at parts'. Remove one of them.")
     reach = min(s.thermal_margin, max(2.0, 3e3 * math.sqrt(1.1e-4 * s.pulse_ms * 1e-3)))
     # a short pulse heats a small region (heat spreads ~sqrt(alpha_cu t)): tighter, finer domain
     f_pulse = pool.submit(thermal_model, "pulse", thermal_box(board, box, s, reach) if box else None,

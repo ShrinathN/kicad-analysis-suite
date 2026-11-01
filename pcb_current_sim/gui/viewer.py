@@ -11,6 +11,7 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from .. import export  # noqa: E402
 from ..tables import TABLES, fmt, readout, sort_key  # noqa: E402
+from .widgets import fit_tree, tree_frame  # noqa: E402
 
 class Viewer(tk.Toplevel):
     def __init__(self, master, res):
@@ -86,17 +87,13 @@ class Viewer(tk.Toplevel):
         nb.add(txt, text="Summary")
         for title, attr, cols in TABLES:
             rows = getattr(res, attr)
-            f = ttk.Frame(nb)
-            tv = ttk.Treeview(f, columns=cols, show="headings")
+            f, tv = tree_frame(nb, cols)
             for c in cols:
                 tv.heading(c, text=c, command=lambda c=c, tv=tv: self._sort(tv, c))
                 tv.column(c, width=max(70, 9 * len(c)), anchor="w")
             for k, r in enumerate(rows):
                 tv.insert("", "end", iid=str(k), values=[fmt(r.get(c)) for c in cols])
-            sb = ttk.Scrollbar(f, orient="vertical", command=tv.yview)
-            tv.configure(yscrollcommand=sb.set)
-            tv.pack(side="left", fill="both", expand=True)
-            sb.pack(side="left", fill="y")
+            fit_tree(tv)
             tv.bind("<<TreeviewSelect>>", lambda e, tv=tv, rows=rows: self._goto(tv, rows))
             nb.add(f, text=f"{title} ({len(rows)})")
         self.redraw()

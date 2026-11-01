@@ -23,7 +23,7 @@ from ..extract import spice as SP  # noqa: E402
 from ..suite.library import fmt_si, parse_si  # noqa: E402
 from .schematic import colours, draw_dot, draw_ground, draw_symbol  # noqa: E402
 from .crossprobe import CrossProbe, selected_rows  # noqa: E402
-from .layout import refit, scrolled  # noqa: E402
+from .layout import AutoList, refit, scrolled  # noqa: E402
 from .suite import attach_suite_menu  # noqa: E402
 
 OPTS = (("f_max", "f max [Hz]", "si", "Highest frequency of interest: sections are ≤ λ/10 here (≈ 0.35 / t_rise)"),
@@ -73,7 +73,7 @@ def _cell(fmt, v):
 
 
 def _list(parent, cols):
-    lc = wx.ListCtrl(parent, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+    lc = AutoList(parent, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
     for k, (title, _, w, _) in enumerate(cols):
         lc.InsertColumn(k, title, width=w)
     return lc
@@ -266,7 +266,7 @@ class ExtractFrame(wx.Frame):
 
         pb = wx.StaticBoxSizer(wx.VERTICAL, left, "Ports (pads, in order: P1, P2, …)")
         pbox = pb.GetStaticBox()
-        self.plist = wx.ListCtrl(pbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 130))
+        self.plist = AutoList(pbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 130))
         for k, (t, w) in enumerate((("Port", 50), ("Pad", 110), ("Net", 140))):
             self.plist.InsertColumn(k, t, width=w)
         self.plist.SetToolTip("The pads where the model's terminals are (P1, P2, … in this order). All ports "
@@ -300,7 +300,7 @@ class ExtractFrame(wx.Frame):
 
         eb = wx.StaticBoxSizer(wx.VERTICAL, left, "Elements between pads (R, diode, C, L)")
         ebox = eb.GetStaticBox()
-        self.elist = wx.ListCtrl(ebox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 110))
+        self.elist = AutoList(ebox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 110))
         for k, (t, w) in enumerate((("On", 35), ("Name", 55), ("Kind", 85), ("Value", 80), ("Pads", 140))):
             self.elist.InsertColumn(k, t, width=w)
         self.elist.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._el_edit())
@@ -370,7 +370,7 @@ class ExtractFrame(wx.Frame):
         self.segs = _list(sg, SEG_COLS)
         gs.Add(self.segs, 3, wx.EXPAND | wx.ALL, 4)
         gs.Add(wx.StaticText(sg, label="Vias, pads, zones and elements"), 0, wx.LEFT, 6)
-        self.vias = wx.ListCtrl(sg, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+        self.vias = AutoList(sg, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
         for k, (t, w) in enumerate((("Item", 150), ("Layers / nodes", 120), ("R [mΩ]", 70), ("L [nH]", 70),
                                     ("C [pF]", 70), ("Note", 320))):
             self.vias.InsertColumn(k, t, width=w)

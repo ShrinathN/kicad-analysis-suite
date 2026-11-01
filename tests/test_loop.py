@@ -664,3 +664,200 @@ def test_saved_switch_models_apply_by_part_number(tmp_path):
     assert done == [hs.key]
     assert hs.model["rds_on"] == 0.05 and hs.model["t_fall"] == 2e-9 and hs.model["assumed"] is False
     assert s.by_role("lower")[0].model.get("assumed")           # the low side was not saved
+
+
+# ---- step 3: snubber, EMI, losses ---------------------------------------------------------
+@pytest.fixture(scope="module")
+def buck_run():
+    """The buck cell analysed with its switching edges (shared by the step-3 tests)."""
+    from pcb_current_sim.loop import analysis as A, model as M, transient as TR
+    b = buck_cell()
+    s = M.detect(b)
+    s.cells, s.adaptive, s.i_switch, s.v_rail, s.f_sw, s.duty = 1500, False, 10.0, 12.0, 500e3, 0.4
+    r = A.run(b, ST.from_board(b), s)
+    r.edges, r.tran = TR.run(b, s, r)
+    return b, s, r
+
+
+def test_loop_moment_is_origin_free_and_sized_like_the_loop(monkeypatch):
+    """The magnetic moment of the extracted HF currents closes (the same from any origin) and its
+    area is of the order of the loop's footprint."""
+    import copy
+    from pcb_current_sim.loop import analysis as A, model as M
+    seen = []
+    orig = A._moment
+
+    def both(mesh, Ib, circ, V, f, s, board):
+        m0 = orig(mesh, Ib, circ, V, f, s, board)
+        m2 = copy.copy(mesh)
+        m2.node_xy = mesh.node_xy + np.array([37.0, -21.0])
+        m2.z = {k: v + 0.01 for k, v in mesh.z.items()}
+        seen.append((m0, orig(m2, Ib, circ, V, f, s, board)))
+        return m0
+    monkeypatch.setattr(A, "_moment", both)
+    b = buck_cell()
+    s = M.detect(b)
+    s.cells, s.adaptive = 1200, False
+    r = A.run(b, ST.from_board(b), s)
+    for m0, m1 in seen:
+        assert np.allclose(m0, m1, rtol=1e-4, atol=1e-12)
+    for c in r.commutations:
+        assert 5 < c["A_loop_mm2"] < 60          # cap to switches to the GND via: about 9 x 4 mm, plus the stack height
+
+
+def test_snubber_damps_the_ring_on_the_board_and_in_the_lumped_model(buck_run):
+    from pcb_current_sim.loop import analysis as A, model as M, snubber as SN, transient as TR
+    b, s, r = buck_run
+    c = next(c for c in r.commutations if c["off"] == "upper")
+    L, C = c["L_total_nH"] * 1e-9, c["C_par_pF"] * 1e-12
+    rs, cs = SN.suggest(L, C)
+    assert rs == pytest.approx(math.sqrt(L / C)) and cs == pytest.approx(3 * C)
+    off = next(e for e in r.edges if e.kind == "off").metrics
+    t0, v0 = SN.response(L, c["R_mOhm"] * 1e-3, C, 12, 10, off["didt_A_ns"] * 1e9)
+    t1, v1 = SN.response(L, c["R_mOhm"] * 1e-3, C, 12, 10, off["didt_A_ns"] * 1e9, (rs, cs, 1e-9), t_end=t0[-1])
+    m0, m1 = SN.metrics(t0, v0, 12), SN.metrics(t1, v1, 12)
+    # the lumped turn-off reads about the full simulation's overshoot
+    assert m0["overshoot"] == pytest.approx(off["overshoot"], rel=0.25)
+    assert m1["overshoot"] < 0.75 * m0["overshoot"] and m1["t_settle"] < 0.3 * m0["t_settle"]
+    sw = SN.sweep(L, c["R_mOhm"] * 1e-3, C, 12, 10, off["didt_A_ns"] * 1e9, cs, 1e-9, [rs])
+    t2, v2 = SN.response(L, c["R_mOhm"] * 1e-3, C, 12, 10, off["didt_A_ns"] * 1e9, (rs, cs, 1e-9), t_end=t0[-1], n=1500)
+    assert sw[0][1] == pytest.approx(SN.metrics(t2, v2, 12)["overshoot"], rel=1e-9)
+    # on the board: the ring across the upper switch goes, the bare ring is kept for the designer
+    s2 = M.Setup.from_dict(s.to_dict())
+    s2.snubbers = [M.Snubber(pos="upper", r=rs, c=cs, esl=1e-9)]
+    s2 = M.Setup.from_dict(s2.to_dict())
+    r2 = A.run(b, ST.from_board(b), s2)
+    c2 = next(c for c in r2.commutations if c["off"] == "upper")
+    assert c2["Q"] < 2 < c["Q"]
+    assert c2["f_ring_bare"] == pytest.approx(c["f_ring"], rel=0.02) and c2["C_par_pF"] == pytest.approx(c["C_par_pF"], rel=0.05)
+    edges, summ = TR.run(b, s2, r2)
+    off2 = next(e for e in edges if e.kind == "off").metrics
+    assert off2["overshoot"] < 0.6 * off["overshoot"]
+    assert summ["P_snub_W"] == pytest.approx(cs * 12 ** 2 * 500e3)
+
+
+def test_emi_spectrum_of_the_switching_period(buck_run):
+    """One period from the two edges: its fundamental matches a trapezoid's, the harmonics stay
+    under the trapezoid bound away from the ring, and the limits are the CISPR 32 values."""
+    from pcb_current_sim.loop import emi as EM
+    b, s, r = buck_run
+    x = EM.analyse(r, s)
+    v_sw = 12.0
+    fund = 2 * v_sw / math.pi * math.sin(math.pi * s.duty)            # square wave of duty d
+    assert x["v_amp"][0] == pytest.approx(fund, rel=0.08)
+    assert x["f"][0] == pytest.approx(s.f_sw)
+    away = (x["f"] < 20e6)
+    assert np.all(x["v_amp"][away] < 1.1 * x["envelope"][away])
+    assert x["area_mm2"] > 0 and x["rad_f"].min() >= 30e6 and x["cond_db"] is None
+    assert EM.limit_line(EM.limits("b10")[3], [100e6, 500e6]) == pytest.approx([30, 37])
+    assert EM.limit_line(EM.limits("a3")[3], [100e6]) == pytest.approx([50])
+    assert EM.limit_line(EM.CONDUCTED["b"]["qp"], [150e3, 500e3, 1e6, 10e6]) == pytest.approx([66, 56, 56, 60])
+    # a receiver wider than the harmonic spacing adds them up
+    f = np.arange(1, 11) * 10e3
+    assert EM.receiver(f, np.ones(10), 30e3)[4] == pytest.approx(3.0)
+    s.c_cm = 20e-12
+    x2 = EM.analyse(r, s)
+    s.c_cm = 0.0
+    assert x2["cond_db"] is not None and math.isfinite(x2["cond_margin"])
+
+
+def test_losses_for_the_thermal_map(buck_run):
+    from pcb_current_sim import solver as S
+    from pcb_current_sim.loop import losses as LS
+    b, s, r = buck_run
+    rows, notes = LS.part_losses(b, s, r.tran)
+    w = {ref: p for ref, p, _ in rows}
+    q1, q2 = s.device("Q1").fet().rds_on, s.device("Q2").fet().rds_on
+    i2 = s.i_switch ** 2 + s.i_ripple ** 2 / 12
+    assert w["Q1"] == pytest.approx(i2 * 0.4 * q1 + r.tran["P_sw_W"])        # hard-switched (buck: upper)
+    assert w["Q2"] == pytest.approx(i2 * 0.6 * q2)
+    heat = S.part_heat(b, [dict(ref="Q1", W=1.0), dict(ref="NOPE", W=2.0)])
+    assert sum(h[3] for h in heat) == pytest.approx(1.0) and len(heat) == 3      # Q1's three pads
+    box = S.part_heat_box(b, [dict(ref="U1", W=1.0)], (0, 0, 1, 1))
+    assert box[2] > 9 and box[3] > 7
+
+
+def four_switch(text=False):
+    """A 4-switch buck-boost: input leg Q1 (VIN -> SW1) / Q2 (SW1 -> GND), output leg Q4 (VOUT -> SW2) /
+    Q3 (SW2 -> GND), L1 between the two switch nodes, C1 on the input, C2 on the output, an FB divider
+    on VOUT, gate traces to a controller U1."""
+    q = lambda ref, x, top, bot, g: fp(ref, [("1", (x, 0), (2, 2), top), ("2", (x + 3, 0), (2, 2), bot),  # noqa: E731
+                                            ("3", (x + 1.5, 2.2), (0.6, 0.6), g)])
+    items = (q("Q1", 0, "VIN", "SW1", "G1") + q("Q2", 6, "SW1", "GND", "G2")
+             + q("Q4", 20, "VOUT", "SW2", "G4") + q("Q3", 14, "SW2", "GND", "G3")
+             + fp("C1", [("1", (0, -4), (1.2, 1.4), "VIN"), ("2", (2.5, -4), (1.2, 1.4), "GND")], "10u")
+             + fp("C2", [("1", (20, -4), (1.2, 1.4), "VOUT"), ("2", (22.5, -4), (1.2, 1.4), "GND")], "22u")
+             + fp("L1", [("1", (8, 5), (2, 2), "SW1"), ("2", (15, 5), (2, 2), "SW2")], "4.7uH")
+             + fp("R1", [("1", (24, 4), (0.6, 0.6), "VOUT"), ("2", (24, 6), (0.6, 0.6), "FB")], "100k")
+             + fp("R2", [("1", (25, 6), (0.6, 0.6), "FB"), ("2", (25, 8), (0.6, 0.6), "GND")], "10k")
+             + fp("U1", [("1", (1.5, 9), (0.6, 0.6), "G1"), ("2", (3, 9), (0.6, 0.6), "SW1"),
+                         ("3", (7.5, 9), (0.6, 0.6), "G2"), ("4", (9, 9), (0.6, 0.6), "GND"),
+                         ("5", (15.5, 9), (0.6, 0.6), "G3"), ("6", (21.5, 9), (0.6, 0.6), "G4"),
+                         ("7", (23, 9), (0.6, 0.6), "SW2"), ("8", (26, 9), (0.6, 0.6), "FB")], "ctrl")
+             + zone("VIN", "F.Cu", -1, -5, 1, 1) + zone("VOUT", "F.Cu", 19, -5, 21, 1)
+             + zone("GND", "B.Cu", -3, -7, 28, 11))
+    return board_text(items, outline=(-5, -9, 30, 12)) if text else board(items, outline=(-5, -9, 30, 12))
+
+
+def test_topology_labels_and_direction():
+    from pcb_current_sim.loop import model as M
+    b = buck_cell()
+    s = M.detect(b)
+    assert s.resolved(b) == "buck" and s.label(b) == "Synchronous buck (detected)"
+    s.topology = "boost"            # the topology fixes the direction, whatever i_dir says
+    s.i_dir = "out"
+    assert s.current_dir(b) == ("in", "from the topology") and s.active() == ["lower"]
+    assert s.label(b) == "Synchronous boost"
+    s.topology = "half_bridge"
+    assert s.current_dir(b)[0] == "out" and s.active() == ["upper", "lower"]
+    q2 = s.device("Q2")
+    q2.kind, q2.nets, q2.model = "diode", {"A": "GND", "K": "SW"}, {}
+    s.topology = "auto"
+    assert s.label(b) == "Buck with a diode rectifier (detected)"
+    s.topology = "boost"            # a diode in the controlled position is reported
+    from pcb_current_sim.loop import checks as CK
+    assert any("switches its lower position" in i.text and i.fix == "opt:topology" for i in CK.check(b, s))
+    bi = boost_ic()
+    si = M.detect(bi, "SW")
+    assert si.resolved(bi) == "boost" and "internal switches" in si.label(bi)
+
+
+def test_four_switch_buck_boost_legs():
+    from pcb_current_sim.loop import checks as CK
+    from pcb_current_sim.loop import model as M
+    b = four_switch()
+    a = M.detect(b, "SW1")
+    o = M.detect(b, "SW2")
+    assert (a.rail_net, o.rail_net) == ("VIN", "VOUT")
+    assert a.other_leg(b) == "SW2" and o.other_leg(b) == "SW1"
+    assert a.resolved(b) == "bb_in" and o.resolved(b) == "bb_out"
+    assert M.inductance(b, "SW1") == pytest.approx(4.7e-6)
+    # the second leg is asked for until it has a cell
+    assert any(i.fix == "cell:SW2" for i in CK.check(b, a))
+    assert not any(i.fix == "cell:SW2" for i in CK.check(b, a, cells=["SW2"]))
+
+
+def test_operating_point_from_the_converter():
+    from pcb_current_sim.loop import operating as OP
+    o = OP.from_converter("buck", 12, 5, 3, 4.7e-6, 500e3)
+    assert o["v_rail"] == 12 and o["duty"] == pytest.approx(5 / 12) and o["i_switch"] == 3
+    assert o["i_ripple"] == pytest.approx(7 * 5 / 12 / (4.7e-6 * 500e3)) and o["i_dir"] == "out"
+    o = OP.from_converter("boost", 3.7, 5, 2, 2.2e-6, 1e6, eff=0.9)
+    assert o["v_rail"] == 5 and o["duty"] == pytest.approx(1 - 3.7 / 5)
+    assert o["i_switch"] == pytest.approx(2 * 5 / (3.7 * 0.9)) and o["i_dir"] == "in"
+    # a diode rectifier at light load goes discontinuous: on at 0 A, off at the triangle's peak, whose
+    # area gives the load current
+    o = OP.from_converter("buck", 12, 5, 0.1, 4.7e-6, 500e3, sync=False)
+    ipk = o["i_ripple"]
+    t_on, t_off = ipk * 4.7e-6 / 7, ipk * 4.7e-6 / 5
+    assert o["mode"] == "DCM" and o["i_switch"] == pytest.approx(ipk / 2)
+    assert ipk / 2 * (t_on + t_off) * 500e3 == pytest.approx(0.1) and o["duty"] == pytest.approx(t_on * 500e3)
+    assert OP.from_converter("buck", 12, 5, 0.1, 4.7e-6, 500e3, sync=True)["mode"] == "CCM"
+    o = OP.from_converter("half_bridge", 48, 24, -20, 0, 20e3)
+    assert o["i_dir"] == "in" and o["i_switch"] == 20 and o["duty"] == 0.5
+    # a 4-switch buck-boost: the leg that is not regulating sits still
+    assert not OP.from_converter("bb_in", 12, 20, 2, 4.7e-6, 400e3)["switching"]
+    o = OP.from_converter("bb_out", 12, 20, 2, 4.7e-6, 400e3)
+    assert o["switching"] and o["v_rail"] == 20 and o["duty"] == pytest.approx(0.4)
+    with pytest.raises(ValueError):
+        OP.from_converter("buck", 5, 12, 1, 1e-6, 1e6)

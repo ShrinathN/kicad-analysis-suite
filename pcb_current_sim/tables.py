@@ -1,15 +1,46 @@
 """Toolkit-neutral helpers shared by the Tk and wx viewers."""
 import math
+import re
 
 import numpy as np
 
 from . import export
+
+def parse_amount(text, unit):
+    """A row's value with SI prefixes and an optional unit: '1m', '500mA', '2.5 A', '1u', '1k', '1M',
+    '12 V', '3V3' (= 3.3 V), '-2m'.  unit: "A" or "V".  Raises ValueError."""
+    from .suite.library import parse_si
+    t = str(text).strip().replace(" ", "").replace(",", ".")
+    sign = -1.0 if t.startswith("-") else 1.0
+    t = t.lstrip("+-")
+    m = re.fullmatch(rf"(\d+)[{unit}{unit.lower()}](\d+)", t)          # 3V3, 1A5
+    if m:
+        return sign * float(f"{m.group(1)}.{m.group(2)}")
+    if t[-1:] in (unit, unit.lower()):
+        t = t[:-1]
+    if not t:
+        raise ValueError(text)
+    return sign * parse_si(t)
+
+
+def fmt_amount(v, unit):
+    """'1 mA', '12 V', '1.23456 A': a row's value as the dialogs and tables show it, every digit kept
+    (editing a row must not round it)."""
+    from .suite.library import PREFIXES
+    if not v or not math.isfinite(v):
+        return f"{v:g} {unit}"
+    for p, k in PREFIXES:
+        if abs(v) >= k * 0.9999999:
+            return f"{v / k:.12g} {p}{unit}"
+    return f"{v:.12g} {unit}"
+
 
 TABLES = [
     ("Excitations", "rows", export.ROW_COLS),
     ("Pads", "pads", export.PAD_COLS),
     ("Vias / barrels", "vias", export.VIA_COLS),
     ("Elements", "elements", export.ELEM_COLS),
+    ("Regulators", "regulators", export.REG_COLS),
     ("Loss ranking", "segments", export.SEG_COLS),
     ("Inductance", "inductance", export.IND_COLS),
     ("Pulse", "pulse_table", export.PULSE_COLS),

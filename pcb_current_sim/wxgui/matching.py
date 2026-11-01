@@ -25,7 +25,7 @@ from ..matching import microstrip as MS  # noqa: E402
 from ..matching import model as M  # noqa: E402
 from ..matching import plots as PL  # noqa: E402
 from ..suite.library import C_TOL_CODES, DIELECTRICS, fmt_like, fmt_si, parse_si  # noqa: E402
-from .layout import refit, scrolled  # noqa: E402
+from .layout import AutoList, refit, scrolled  # noqa: E402
 from .schematic import SchematicCanvas, make_icon  # noqa: E402
 from .suite import PART_FIELDS, PART_TIPS, PartDialog, attach_suite_menu  # noqa: E402
 
@@ -403,7 +403,7 @@ class MatchingFrame(wx.Frame):
         s = wx.BoxSizer(wx.VERTICAL)
         s.Add(wx.StaticText(pnl, label="Worst case found by the search (variable values at the worst point)"),
               0, wx.ALL, 4)
-        self.wc = wx.ListCtrl(pnl, style=wx.LC_REPORT)
+        self.wc = AutoList(pnl, style=wx.LC_REPORT)
         s.Add(self.wc, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 4)
         row = wx.BoxSizer(wx.HORIZONTAL)
         row.Add(wx.StaticText(pnl, label="Bill of materials"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -411,7 +411,7 @@ class MatchingFrame(wx.Frame):
         b.Bind(wx.EVT_BUTTON, lambda e: self._export_bom())
         row.Add(b, 0, wx.LEFT, 8)
         s.Add(row, 0, wx.ALL, 4)
-        self.bom = wx.ListCtrl(pnl, style=wx.LC_REPORT)
+        self.bom = AutoList(pnl, style=wx.LC_REPORT)
         for k, (t, w) in enumerate((("Refs", 90), ("Qty", 40), ("Kind", 110), ("Value", 80), ("Tolerance", 80),
                                     ("Library part", 200), ("Package", 70), ("Manufacturer", 110), ("Notes", 150))):
             self.bom.InsertColumn(k, t, width=w)

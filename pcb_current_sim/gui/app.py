@@ -9,8 +9,9 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from .. import board as B
 from .. import elements as EL
 from .. import solver as S
-from ..tables import CHECKS, FLOAT_SETTINGS, ROW_TEXT
+from ..tables import CHECKS, FLOAT_SETTINGS, ROW_TEXT, fmt_amount, parse_amount
 from ..scenario import load_scenario, save_scenario, scenario_path
+from .widgets import fit_tree, tree_frame
 
 
 class RowDialog(tk.Toplevel):
@@ -21,7 +22,7 @@ class RowDialog(tk.Toplevel):
         self.title("Excitation")
         self.transient(master)
         self.board, self.result = board, None
-        nets = [n for n in board.nets if board.pad_ids(n)]
+        nets = sorted((n for n in board.nets if board.pad_ids(n)), key=EL.natural_key)
         row = row or S.Row(f"row{len(master.rows) + 1}", [], [], 1.0)
 
         def net_of(ids):
@@ -37,7 +38,7 @@ class RowDialog(tk.Toplevel):
         self.nsnk = tk.StringVar(value=net_of(row.snk or row.src))
         self.vlabel = ttk.Label(f, text="Current [A]")
         self.vlabel.grid(row=0, column=2, sticky="e", padx=(12, 4))
-        self.cur = tk.StringVar(value=f"{row.current:g}")
+        self.cur = tk.StringVar(value=fmt_amount(row.current, row.unit))
         ttk.Entry(f, textvariable=self.cur, width=10).grid(row=0, column=3, sticky="w")
         self.kind = tk.StringVar(value=S.KINDS[row.kind])
         kc = ttk.Combobox(f, textvariable=self.kind, values=list(S.KINDS.values()), state="readonly", width=18)
@@ -85,7 +86,7 @@ class RowDialog(tk.Toplevel):
 
     def _fill_one(self, var, lb, sel=()):
         lb.delete(0, "end")
-        for k, pid in enumerate(self.board.pad_ids(var.get())):
+        for k, pid in enumerate(sorted(self.board.pad_ids(var.get()), key=EL.natural_key)):
             lb.insert("end", pid)
             if pid in sel:
                 lb.selection_set(k)
@@ -95,9 +96,11 @@ class RowDialog(tk.Toplevel):
         src = [self.lsrc.get(i) for i in self.lsrc.curselection()]
         snk = [self.lsnk.get(i) for i in self.lsnk.curselection()]
         try:
-            cur = float(self.cur.get())
+            cur = parse_amount(self.cur.get(), "V" if self._kind() == "V" else "A")
         except ValueError:
-            return messagebox.showerror("Excitation", "The value must be a number.", parent=self)
+            return messagebox.showerror("Excitation", "The value must be a number, with an SI prefix and unit if "
+                                        "you like: 0.5, 500m, 500mA, 2.5 A, 12 V, 3V3 (m = milli, M = mega).",
+                                        parent=self)
         if not src or not snk:
             return messagebox.showerror("Excitation", "Select at least one source and one sink pad.", parent=self)
         if set(src) & set(snk):
@@ -252,12 +255,12 @@ class App(tk.Tk):
         tf = ttk.Labelframe(body, text="Excitations (all rows are solved together)", padding=6)
         body.add(tf, weight=3)
         cols = ("name", "kind", "src", "snk", "I", "net")
-        self.tree = ttk.Treeview(tf, columns=cols, show="headings", height=8, selectmode="extended")
+        tframe, self.tree = tree_frame(tf, cols, height=8, selectmode="extended")
         for c, t, w in zip(cols, ("Name", "Kind", "Source / + pads", "Sink / − pads", "Value", "Net"),
                            (110, 110, 200, 200, 80, 200)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w")
-        self.tree.pack(side="left", fill="both", expand=True)
+        tframe.pack(side="left", fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda e: self._edit())
         bf = ttk.Frame(tf)
         bf.pack(side="left", fill="y", padx=(6, 0))
@@ -277,12 +280,12 @@ class App(tk.Tk):
                                        "you add)", padding=6)
         body.add(ef, weight=2)
         cols = ("on", "used", "name", "a", "b", "R", "P", "nets", "heats", "src")
-        self.etree = ttk.Treeview(ef, columns=cols, show="headings", height=5, selectmode="extended")
+        eframe, self.etree = tree_frame(ef, cols, height=5, selectmode="extended")
         for c, t, w in zip(cols, ("On", "In circuit", "Name", "Pad A", "Pad B", "Value", "Rating [W]", "Nets",
                                    "Heats board", "Source"), (40, 75, 80, 90, 90, 90, 80, 220, 85, 60)):
             self.etree.heading(c, text=t)
             self.etree.column(c, width=w, anchor="w")
-        self.etree.pack(side="left", fill="both", expand=True)
+        eframe.pack(side="left", fill="both", expand=True)
         self.etree.bind("<Double-1>", lambda e: self._el_edit())
         ebf = ttk.Frame(ef)
         ebf.pack(side="left", fill="y", padx=(6, 0))
@@ -327,11 +330,11 @@ class App(tk.Tk):
         lf.grid(row=0, column=4, rowspan=r + (len(CHECKS) + 1) // 2, sticky="nsew", padx=(8, 0))
         sf.columnconfigure(4, weight=1)
         ttk.Label(lf, text="Copper thickness (double-click to override)").pack(anchor="w")
-        self.ltree = ttk.Treeview(lf, columns=("layer", "stack", "use"), show="headings", height=5)
+        lframe, self.ltree = tree_frame(lf, ("layer", "stack", "use"), height=5)
         for c, t in zip(("layer", "stack", "use"), ("Layer", "From board [µm]", "Used [µm]")):
             self.ltree.heading(c, text=t)
             self.ltree.column(c, width=90, stretch=True)
-        self.ltree.pack(fill="both", expand=True)
+        lframe.pack(fill="both", expand=True)
         self.ltree.bind("<Double-1>", self._edit_thickness)
 
         # run
@@ -439,6 +442,7 @@ class App(tk.Tk):
             t0 = self.board.cu_thickness[L] * 1e6
             t = self.settings.thickness.get(L, self.board.cu_thickness[L]) * 1e6
             self.ltree.insert("", "end", iid=L, values=(L, f"{t0:.1f}", f"{t:.1f}"))
+        fit_tree(self.ltree)
 
     def _edit_thickness(self, e):
         L = self.ltree.identify_row(e.y)
@@ -464,8 +468,9 @@ class App(tk.Tk):
                 ps = self.board.pads_by_id(ids[0]) if self.board and ids else []
                 nets.append(ps[0].net if ps else "?")
             self.tree.insert("", "end", iid=str(k), values=(r.name, S.KINDS[r.kind], " + ".join(r.src),
-                                                            " + ".join(r.snk), f"{r.current:g} {r.unit}",
+                                                            " + ".join(r.snk), fmt_amount(r.current, r.unit),
                                                             nets[0] if nets[0] == nets[1] else f"{nets[0]} → {nets[1]}"))
+        fit_tree(self.tree)
         self._refresh_elements()
 
     # ------------------------------------------------------------- elements
@@ -476,7 +481,7 @@ class App(tk.Tk):
     def _refresh_elements(self):
         self.etree.delete(*self.etree.get_children())
         if not self.board:
-            return
+            return fit_tree(self.etree)
         try:
             _, used, _ = EL.active(self.board, S.nets_of_rows(self.board, self.rows), self._used_elements())
             used = {id(e) for e in used}
@@ -487,8 +492,9 @@ class App(tk.Tk):
             self.etree.insert("", "end", iid=str(k), values=(
                 "✓" if e.enabled and (self.autor.get() or not e.auto) else "–", "yes" if id(e) in used else "",
                 e.name, e.a, e.b, e.describe(), f"{e.P_rated:g}" if e.P_rated else "",
-                f"{nets.get(e.a, '?')} – {nets.get(e.b, '?')}", "yes" if e.heats else "no (external)",
+                " – ".join(nets.get(p, "?") for p in e.pads()), "yes" if e.heats else "no (external)",
                 "auto" if e.auto else "user"))
+        fit_tree(self.etree)
 
     def _el_selected(self):
         return [int(i) for i in self.etree.selection()]
@@ -503,6 +509,9 @@ class App(tk.Tk):
 
     def _el_edit(self):
         sel = self._el_selected()
+        if sel and self.elements[sel[0]].regulator:
+            return messagebox.showinfo("Regulator", "Regulators are edited in the KiCad (wx) window; here they "
+                                                    "can be switched on / off or deleted.")
         if sel:
             d = ElementDialog(self, self.board, self.elements[sel[0]])
             if d.result:

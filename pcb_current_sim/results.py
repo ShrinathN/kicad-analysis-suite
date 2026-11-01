@@ -45,6 +45,7 @@ class Result:
     vias: list = field(default_factory=list)
     segments: list = field(default_factory=list)
     elements: list = field(default_factory=list)
+    regulators: list = field(default_factory=list)
     net_table: list = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
@@ -146,7 +147,7 @@ class Result:
         meta = dict(board_path=self.board_path, layers=self.layers, nets=self.nets,
                     grid=vars(self.grid), tgrid=vars(self.tgrid) if self.tgrid else None,
                     rows=self.rows, pads=self.pads, vias=self.vias, segments=self.segments,
-                    elements=self.elements, net_table=self.net_table, summary=self.summary, warnings=self.warnings,
+                    elements=self.elements, regulators=self.regulators, net_table=self.net_table, summary=self.summary, warnings=self.warnings,
                     outlines=self.outlines, bgrid=vars(self.bgrid) if self.bgrid else None,
                     pgrid=vars(self.pgrid) if self.pgrid else None,
                     inductance=self.inductance, pulse=self.pulse,
@@ -173,7 +174,7 @@ class Result:
                 fields.setdefault(L, {})[k] = z[key]
         r = cls(meta["board_path"], meta["layers"], meta["nets"], Grid(**meta["grid"]), fields,
                 Grid(**meta["tgrid"]) if meta["tgrid"] else None, T or None)
-        for k in ("rows", "pads", "vias", "segments", "elements", "net_table", "summary", "warnings", "outlines",
+        for k in ("rows", "pads", "vias", "segments", "elements", "regulators", "net_table", "summary", "warnings", "outlines",
                   "inductance"):
             setattr(r, k, meta.get(k, []))
         r.Tp, r.B, r.pulse = Tp or None, Bf or None, meta.get("pulse")
@@ -186,6 +187,7 @@ class Result:
         paths = []
         for name, rows in (("rows", self.rows), ("pads", self.pads), ("vias", self.vias),
                            ("segments", self.segments), ("elements", self.elements),
+                           ("regulators", self.regulators),
                            ("inductance", self.inductance), ("pulse", self.pulse_table),
                            ("nets", self.net_table)):
             if not rows:
@@ -239,6 +241,14 @@ class Result:
         out.append(f"Total dissipation in copper: {s['P_total_W']:.3f} W")
         for n in self.net_table:
             out.append(f"  {n['net']}: {n['P_W']:.3f} W, peak |J| {n['J_max']:.0f} A/mm²")
+        for r in self.regulators:
+            line = (f"Regulator {r['name']} ({r['type']}, {r['Vout_set_V']:g} V): IN {r['V_in_V']:.4g} V, "
+                    f"OUT {r['V_out_V']:.4g} V, {r['I_out_A']:.4g} A out, {r['I_in_A']:.4g} A in, P = {r['P_W']:.4g} W")
+            if r.get("T_j_C") is not None:
+                line += f", T_j ≈ {r['T_j_C']:.1f} °C"
+            if r["dropout"]:
+                line += " (in dropout)"
+            out.append(line)
         if self.elements:
             out.append(f"Resistance elements: {s.get('P_elements_W', 0):.3f} W in {len(self.elements)} part(s)")
             for e in self.elements:
@@ -366,7 +376,7 @@ def build_result(board, R, net, sol, cold, coarse, tm, rows, s, thick, info, mag
             for pid in ids:
                 roles.setdefault(pid, []).append(f"{side}:{row.name}")
     for e in net.elements:
-        for pid in (e.a, e.b):
+        for pid in e.pads():
             roles.setdefault(pid, []).append(f"element {e.name}")
     for k, p in enumerate(board.pads):
         if p.net not in R.nets:
@@ -392,6 +402,29 @@ def build_result(board, R, net, sol, cold, coarse, tm, rows, s, thick, info, mag
     for k, e in enumerate(net.elements):
         I, dV = sol.element_I[k], sol.element_dV[k]
         P = abs(I * dV)
+        if k in sol.reg:
+            rg = sol.reg[k]
+            P = rg["P"]
+            pads_ = [p for p in board.pads if p.ref == pad_of[e.a].ref and p.layers]
+            T_case = max((T_at(p.layers[0], *p.pos) for p in pads_), default=float("nan"))
+            Tj = T_case + P * e.psi_jb if e.psi_jb > 0 and Tfine is not None else None
+            res.regulators.append(dict(
+                name=e.name, type="linear" if e.model == "LDO" else "switching", Vout_set_V=e.Vout,
+                V_in_V=rg["V_in"], V_out_V=rg["V_out"], I_in_A=rg["I_in"], I_out_A=rg["I_out"], P_W=P,
+                headroom_V=rg["V_in"] - rg["V_out"] if e.model == "LDO" else None, dropout=rg["dropout"], T_pads_C=T_case, T_j_C=Tj,
+                Tj_max_C=e.Tj_max, IN=e.a, OUT=e.b, GND=e.g, board_heat=e.heats,
+                x=pad_of[e.a].pos[0], y=pad_of[e.a].pos[1]))
+            if rg["dropout"]:
+                res.warnings.append(f"Regulator {e.name} is in dropout: IN {rg['V_in']:.3g} V is less than "
+                                    f"{e.Vout:g} V + {e.Vf:g} V at its pins, so its output is {rg['V_out']:.3g} V.")
+            if rg["I_out"] < -1e-6:
+                res.warnings.append(f"Regulator {e.name} sinks {-rg['I_out']:.3g} A at its output: something else "
+                                    f"holds the output above {e.Vout:g} V (most regulators cannot sink).")
+            if e.model == "SMPS" and rg["V_in"] <= 0.05 * max(e.Vout, 0.1):
+                res.warnings.append(f"Regulator {e.name} has no input voltage ({rg['V_in']:.3g} V).")
+            if Tj is not None and Tj > e.Tj_max:
+                res.warnings.append(f"Regulator {e.name}: junction ≈ {Tj:.0f} °C, above its {e.Tj_max:g} °C limit "
+                                    f"({P:.3g} W).")
         P_el += P
         pa, pb = pad_of[e.a], pad_of[e.b]
         d = dict(name=e.name, a=e.a, b=e.b, net_a=pa.net, net_b=pb.net, R=e.describe(), R_ohm=e.R, model=e.model, Vf_V=e.Vf,

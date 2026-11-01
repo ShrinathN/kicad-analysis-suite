@@ -145,6 +145,8 @@ PAD_COLS = ["pad", "net", "role", "I_A", "V_mV", "T_C"]
 VIA_COLS = ["id", "kind", "net", "drill_mm", "I_A", "I_cap_10C", "util", "group", "share_pct", "dV_mV", "P_W"]
 ELEM_COLS = ["name", "a", "b", "net_a", "net_b", "R", "I_A", "V_mV", "P_W", "P_rated_W", "util", "T_C",
              "source", "board_heat"]
+REG_COLS = ["name", "type", "Vout_set_V", "V_in_V", "V_out_V", "headroom_V", "dropout", "I_in_A", "I_out_A", "P_W",
+            "T_pads_C", "T_j_C", "Tj_max_C", "IN", "OUT", "GND", "board_heat"]
 SEG_COLS = ["item", "net", "layer", "P_W", "share_pct", "dV_mV", "I_A", "J_med", "J_max", "crowding",
             "ipc_util_10", "ipc_util_20", "t_fuse_s", "I_fuse_1s", "T_pulse_C"]
 IND_COLS = ["row_a", "row_b", "L_nH", "k", "closure_mm"]
@@ -164,6 +166,8 @@ def export_report_pdf(res, path, stream=False):
         _table_page(pdf, "Excitations", res.rows, ROW_COLS)
         _table_page(pdf, "Pads (voltage / current)", res.pads, PAD_COLS)
         _table_page(pdf, "Vias and plated holes", res.vias, VIA_COLS)
+        if getattr(res, "regulators", None):
+            _table_page(pdf, "Regulators", res.regulators, REG_COLS)
         if res.elements:
             _table_page(pdf, "Resistance elements", res.elements, ELEM_COLS)
         _table_page(pdf, "Loss ranking by copper item", res.segments, SEG_COLS)

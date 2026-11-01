@@ -1,15 +1,25 @@
 # Roadmap
 
-The suite is being built in this order. Steps 1 and 2 are done; the rest are planned. The plan below was worked out with the commercial tools as a reference for how simulations are grouped.
+The suite is being built in this order. The plan below was worked out with the commercial tools as a reference for how simulations are grouped.
 
 | Step | Tool | Status |
 |---|---|---|
 | 1 | Suite framework: Home, stackup & materials, component library, results browser, external tools | done |
 | 2 | Matching & Tolerance | done (synthesis and design centering still to come) |
-| 3 | PDN (AC power integrity) | next |
+| – | Trace R/L/C → SPICE | done |
+| – | Switching Loop: extraction, switching transient, EMI and design aids; buck, boost, half-bridge and 4-switch buck-boost cells | done |
+| – | DC & Thermal: linear and switching regulators | done |
+| 3 | PDN (AC power integrity), including regulator load-step behaviour | next |
+| – | Batch command line: rerun the saved setups after every board change, with pass / fail checks and a report (design discussed, see below) | planned |
 | 4 | 3D extraction (FastHenry / FastCap) | planned |
 | 5 | Full-wave export (openEMS) | planned |
 | 6 | SI & Fields | planned |
+
+## Batch command line (discussed 2026-11-01, not built)
+- `python3 -m pcb_current_sim run BOARD.kicad_pcb` reruns every setup saved in the board's scenario file (the GUI is where you set them up), headless.
+- Pass / fail checks saved with the setups (T_max, voltage at a load, regulator T_j, loop L, overshoot, matching yield), printed as a table; a failure gives a non-zero exit code.
+- Each run writes a report, the tables and a comparison with the previous run, e.g. under the project's `Build/<timestamp>/Simulation/`.
+- Triggers: a Makefile target, `--watch` (rerun on save), a git hook (with a quick mode), CI.
 
 ## The plan (agreed 2026-10-29)
 The user looked at how the commercial tools group their simulations and agreed this structure:

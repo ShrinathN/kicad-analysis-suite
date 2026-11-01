@@ -55,6 +55,7 @@ class Result:
     edges: list = field(default_factory=list)       # switching transient: transient.Edge per edge
     tran: dict = field(default_factory=dict)        # its summary (energies, loss)
     tran_error: str = ""
+    emi: dict = None                                # emi.analyse of the edges (recomputed when its inputs change)
 
 
 def term(ref, net):
@@ -205,7 +206,7 @@ def run(board, stackup, setup, progress=lambda m: None, _coarse=False):
     ref_of = {n: ts[0] for n, ts in by_net.items()}
 
     # ---- circuits ------------------------------------------------------------------
-    def build(off, mode, caps_c=True, fet_caps=True):
+    def build(off, mode, caps_c=True, fet_caps=True, snub=True):
         """off: position turning off ("upper"/"lower"); mode "board" (copper only, parts as
         shorts) or "full".  caps_c=False shorts the capacitors' C (loop inductance);
         fet_caps=False drops the switching parts' capacitances (pure inductances)."""
@@ -282,6 +283,12 @@ def run(board, stackup, setup, progress=lambda m: None, _coarse=False):
                     c.short(a, b)
                 else:
                     c.L(a, b, d.model.get("ls", 0.5e-9), f"{d.key} package", r=d.model.get("r", 0.0))
+        if mode == "full" and fet_caps and snub:          # snubbers ring with the switches' capacitance
+            for sn in s.snubbers_on():
+                a, b = snubber_terms(s, sn)
+                mid = f"{sn.label()}#c"
+                c.L(a, mid, sn.esl, r=sn.r)
+                c.C(mid, b, sn.c)
         for g in drives:
             o, r = term(*g.out), term(*g.ret)
             if mode == "board":
@@ -321,6 +328,9 @@ def run(board, stackup, setup, progress=lambda m: None, _coarse=False):
         Zr = cr.zmatrix(freqs, [pf])[:, 0, 0]
         w = 2 * np.pi * freqs
         pk = CI.peak(freqs, Zr)
+        # the ring without the snubbers (what a snubber is designed against)
+        Zr0 = build(off, "full", snub=False).zmatrix(freqs, [pf])[:, 0, 0] if s.snubbers_on() else Zr
+        pk0 = CI.peak(freqs, Zr0) if s.snubbers_on() else pk
         f_eval = pk[0] if pk else min(100e6, s.f_max)
         k = int(np.argmin(np.abs(freqs - f_eval)))
         Lt, Lb_ = Zl.imag[k] / w[k], Zb.imag[k] / w[k]
@@ -343,7 +353,9 @@ def run(board, stackup, setup, progress=lambda m: None, _coarse=False):
             parts[lab] = parts.get(lab, 0.0) + Lx * abs(I) ** 2
         tot = sum(parts.values())
         brk = sorted(((lab, v) for lab, v in parts.items() if abs(v) > 1e-3 * abs(tot)), key=lambda t: -t[1])
+        m_vec = _moment(mesh, Ib, cl, V, f_eval, s, board)
         c_eff = 1 / ((2 * math.pi * pk[0]) ** 2 * Lt) if pk else float("nan")
+        c_par = 1 / ((2 * math.pi * pk0[0]) ** 2 * Lt) if pk0 else float("nan")
         # di/dt of this edge: the off switch's current fall time, or (a diode turning off) the rise
         # time of the switch taking the current; overshoot ≈ L di/dt
         didt, why = float("nan"), ""
@@ -364,6 +376,9 @@ def run(board, stackup, setup, progress=lambda m: None, _coarse=False):
             Z_peak=pk[2] if pk else float("nan"), C_eff_pF=c_eff * 1e12,
             didt_A_ns=didt * 1e-9, V_over=Lt * didt, didt_from=why,
             breakdown=[(lab, v * 1e9) for lab, v in brk],
+            C_par_pF=c_par * 1e12, f_ring_bare=pk0[0] if pk0 else float("nan"),
+            Q_bare=pk0[1] if pk0 else float("nan"), Z_ring_bare=Zr0,
+            A_loop_mm2=float(np.linalg.norm(m_vec)) * 1e6, m_normal=float(abs(m_vec[2]) / max(np.linalg.norm(m_vec), 1e-30)),
             Z_board=Zb, Z_loop=Zl, Z_ring=Zr))
         res.maps[len(res.commutations) - 1] = _node_maps(mesh, Ib, e)
 
@@ -420,6 +435,43 @@ def run(board, stackup, setup, progress=lambda m: None, _coarse=False):
                       ret_ref=ref_of.get(s.ret_net), rail_ref={n: ref_of[n] for n in M.rail_nets(s) if n in ref_of})
     res.seconds = time.time() - t0
     return res
+
+
+def snubber_terms(s, sn):
+    """The two board terminals a snubber sits across: its position's main part's pins."""
+    d = s.main_part(sn.pos)
+    T = pin_terms(d)
+    return (T["D"], T["S"]) if d.kind == "fet" else (T["K"], T["A"])
+
+
+def _moment(mesh, Ib, circ, V, f, s, board):
+    """Magnetic dipole moment m = ½ Σ I (r_a × r_b) [A m² per A] of the loop current: the copper's
+    bar currents plus the parts' currents as straight pieces between their pins (a part's inner
+    nodes at the middle of its pins).  The current network is closed (Kirchhoff holds at every
+    node), so m does not depend on the origin; |m| per ampere is the loop's effective area, which
+    sets its radiation."""
+    zl = {L: mesh.z[L] for L in mesh.layers}
+    nxyz = np.column_stack([mesh.node_xy * 1e-3, [zl[mesh.layers[k]] for k in mesh.node_layer]])
+    pos = {t: nxyz[n] for t, n in mesh.terminals.items()}
+    names = set(circ.names)
+    for _ in range(3):                     # inner nodes: the middle of their part's pins, else neighbours
+        for nm in names - set(pos):
+            d = s.device(nm.split("#")[0])
+            pts = [pos[t] for t in (pin_terms(d).values() if d else ()) if t in pos]
+            if not pts:
+                pts = [pos[x] for a, b, _, _ in circ.elements for x in ((b,) if a == nm else (a,) if b == nm else ())
+                       if x in pos]
+            if pts:
+                pos[nm] = np.mean(pts, axis=0)
+    m = np.zeros(3, complex)
+    ra, rb = nxyz[mesh.br_a], nxyz[mesh.br_b]
+    m += 0.5 * (np.asarray(Ib)[:, None] * np.cross(ra, rb)).sum(axis=0)
+    fa = np.array(f)
+    for a, b, z, _ in circ.elements:
+        if a in pos and b in pos:
+            i = (V(a) - V(b)) / complex(z(fa))
+            m += 0.5 * i * np.cross(pos[a], pos[b])
+    return np.abs(m)
 
 
 def _node_maps(mesh, I, e):

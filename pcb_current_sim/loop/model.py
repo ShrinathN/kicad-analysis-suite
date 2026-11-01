@@ -6,6 +6,8 @@ Buck, boost and half-bridge legs differ only in which position is active:
   buck:  upper = control FET, lower = synchronous FET or diode (hot-loop caps = input caps)
   boost: lower = control FET, upper = synchronous FET or diode (hot-loop caps = output caps)
   half-bridge / motor phase: both FETs (caps = bus caps)
+  4-switch buck-boost: two cells, one per leg (the inductor joins their switch nodes); the input
+  leg works as a buck, the output leg as a boost
 A position may hold several parts in parallel (a FET with a Schottky across it).  Each FET's
 gate drive is: driver output pin -> optional gate resistor -> gate pin, returning to the driver's
 return pin (the source net: return for a low-side FET, switch node for a high-side one).
@@ -25,10 +27,18 @@ from ..suite.library import Part, part_from_dict, parse_si
 
 TOPOLOGIES = {
     "auto": "Detect from the parts",
-    "buck": "Buck (upper switch active)",
-    "boost": "Boost (lower switch active)",
+    "buck": "Buck (step-down)",
+    "boost": "Boost (step-up)",
     "half_bridge": "Half-bridge / bridge leg (both active)",
+    "bb_in": "4-switch buck-boost, input leg",
+    "bb_out": "4-switch buck-boost, output leg",
 }
+TOPO_CTRL = {"buck": "upper", "bb_in": "upper", "boost": "lower", "bb_out": "lower"}   # the controlled position
+TOPO_NAME = {"buck": "buck", "boost": "boost", "half_bridge": "half-bridge / bridge leg",
+             "bb_in": "4-switch buck-boost, input leg", "bb_out": "4-switch buck-boost, output leg"}
+# what the rail and the inductor's far end are in each topology (the cell diagram's labels)
+TOPO_RAIL = {"buck": "input", "bb_in": "input", "boost": "output", "bb_out": "output", "half_bridge": "bus"}
+TOPO_FAR = {"buck": "output", "bb_in": "output leg", "boost": "input", "bb_out": "input leg", "half_bridge": "load"}
 
 
 @dataclass
@@ -163,6 +173,28 @@ class GateDrive:
 
 
 @dataclass
+class Snubber:
+    """An RC snubber across one switching position (placed ideally, at that part's pads: not a
+    footprint on the board).  Its ESL stands for its own parts and their mounting."""
+    pos: str = "lower"           # "upper" | "lower": across the main part of that position
+    r: float = 2.0               # Ω
+    c: float = 1e-9              # F
+    esl: float = 1e-9            # H
+    enabled: bool = True
+
+    def label(self):
+        return f"snubber {self.pos}"
+
+
+EMI_LIMITS = {
+    "b10": "CISPR 32 class B (homes), 10 m",
+    "b3": "CISPR 32 class B (homes), 3 m",
+    "a10": "CISPR 32 class A (industry), 10 m",
+    "a3": "CISPR 32 class A (industry), 3 m",
+}
+
+
+@dataclass
 class Setup:
     name: str = ""               # the cell's name (a board may have several cells: "" = its switch node)
     topology: str = "auto"
@@ -183,6 +215,16 @@ class Setup:
     i_dir: str = "auto"          # inductor current: "out" of the switch node (buck-like), "in" (boost-like)
     transient: bool = True       # simulate the switching edges (needs the switched current)
     simulator: str = "auto"      # "auto" (ngspice when a FET has a vendor model), "builtin", "ngspice"
+    snubbers: list = field(default_factory=list)    # Snubber
+    duty: float = 0.5            # fraction of the period the hard-switched switch is on (EMI spectrum)
+    c_cm: float = 0.0            # F, switch node to chassis / earth (conducted common-mode estimate; 0 = none)
+    emi_limit: str = "b10"       # key of EMI_LIMITS
+    # the converter's own terms, for "Operating point from the converter" (loop.operating; 0 = not given)
+    v_in: float = 0.0
+    v_out: float = 0.0
+    i_out: float = 0.0           # A, load current (a half-bridge: phase current, + out of the switch node)
+    l_ind: float = 0.0           # H, inductance (0 = the inductor's Value on the board)
+    eff: float = 1.0             # efficiency used for a boost's input current
 
     def to_dict(self):
         return asdict(self)
@@ -190,7 +232,10 @@ class Setup:
     @staticmethod
     def from_dict(d):
         d = dict(d or {})
-        s = Setup(**{k: v for k, v in d.items() if k in {f.name for f in fields(Setup)} - {"devices", "drives"}})
+        s = Setup(**{k: v for k, v in d.items()
+                     if k in {f.name for f in fields(Setup)} - {"devices", "drives", "snubbers"}})
+        s.snubbers = [Snubber(**{k: v for k, v in x.items() if k in {f.name for f in fields(Snubber)}})
+                      for x in d.get("snubbers", [])]
         s.devices = [Device(**{k: v for k, v in x.items() if k in {f.name for f in fields(Device)}})
                      for x in d.get("devices", [])]
         s.drives = []
@@ -201,6 +246,14 @@ class Setup:
             s.drives.append(g)
         return s
 
+    def snubbers_on(self):
+        return [x for x in self.snubbers if x.enabled and x.c > 0 and self.by_role(x.pos)]
+
+    def main_part(self, pos):
+        """The part a position is measured across (its FET if it has one)."""
+        parts = self.by_role(pos)
+        return next((x for x in parts if x.kind == "fet"), parts[0]) if parts else None
+
     def by_role(self, role):
         return [x for x in self.devices if x.role == role and x.enabled]
 
@@ -209,31 +262,63 @@ class Setup:
         return next((x for x in self.devices if x.key == key), None) or \
             next((x for x in self.devices if x.ref == key), None)
 
-    def label(self):
+    def resolved(self, board=None):
+        """The topology key: as set, else from the parts and the board ("" if it can't be told)."""
+        if self.topology in TOPO_NAME:
+            return self.topology
         up = {x.kind for x in self.by_role("upper")}
         lo = {x.kind for x in self.by_role("lower")}
-        if self.topology != "auto":
-            return TOPOLOGIES[self.topology]
-        ic = any(x.internal for x in self.by_role("upper") + self.by_role("lower"))
+        if board is None or not self.sw_net:
+            return "buck" if lo == {"diode"} and "fet" in up else "boost" if up == {"diode"} and "fet" in lo else ""
+        d, _ = self.current_dir(board)
+        if self.other_leg(board):
+            return "bb_in" if d == "out" else "bb_out"
+        return "buck" if d == "out" else "boost"
+
+    def other_leg(self, board):
+        """The inductor's far end when it is a switch node too (a 4-switch buck-boost), else None."""
+        if not self.sw_net:
+            return None
+        _, far = switch_inductor(board, self.sw_net)
+        return far if far and far in switch_nets(board) and not _decoupled(board, far) else None
+
+    def synchronous(self, topo=None):
+        """True if the rectifying position (the one that is not controlled) holds a FET."""
+        ctrl = TOPO_CTRL.get(topo or self.topology)
+        if ctrl is None:
+            return all(any(x.kind == "fet" for x in self.by_role(p)) for p in ("upper", "lower"))
+        rect = "lower" if ctrl == "upper" else "upper"
+        return any(x.kind == "fet" for x in self.by_role(rect))
+
+    def label(self, board=None):
+        """The cell's kind in words: "Synchronous buck", "Boost with a diode rectifier", ..."""
+        parts = self.by_role("upper") + self.by_role("lower")
+        if not parts:
+            return "Switching cell"
+        t = self.resolved(board)
+        ic = any(x.internal for x in parts)
+        if not t:
+            base = ("Synchronous half-bridge (sync buck / sync boost / bridge leg)" if self.synchronous()
+                    else "Switching cell")
+        elif t in ("half_bridge", "bb_in", "bb_out"):
+            base = TOPO_NAME[t][0].upper() + TOPO_NAME[t][1:]
+        elif self.synchronous(t):
+            base = f"Synchronous {t}"
+        else:
+            base = f"{t.capitalize()} with a diode rectifier"
         if ic:
-            if "fet" in up and "fet" in lo:
-                return "Converter IC with internal switches (synchronous)"
-            return "Converter IC with an internal switch" + (" and a diode" if up | lo >= {"diode"} else "")
-        if "fet" in up and "fet" in lo:
-            return "Synchronous half-bridge (sync buck / sync boost / bridge leg)"
-        if "fet" in up:
-            return "Buck with diode rectifier"
-        if "fet" in lo:
-            return "Boost with diode rectifier"
-        return "Switching cell"
+            base += ", IC with internal switches" if sum(x.internal for x in parts) > 1 else ", IC with an internal switch"
+        if self.topology == "auto" and t:
+            base += " (detected)"
+        return base
 
     def current_dir(self, board):
         """("out" | "in", reason): the inductor current's direction at the switch node.  "out" (a
         buck, a bridge sourcing): the upper switch is hard-switched; "in" (a boost): the lower."""
+        if self.topology in TOPO_CTRL:
+            return ("out" if TOPO_CTRL[self.topology] == "upper" else "in"), "from the topology"
         if self.i_dir in ("out", "in"):
             return self.i_dir, "set by hand"
-        if self.topology in ("buck", "boost"):
-            return ("out" if self.topology == "buck" else "in"), "from the topology"
         up = {x.kind for x in self.by_role("upper")}
         lo = {x.kind for x in self.by_role("lower")}
         if up == {"diode"} and "fet" in lo:
@@ -241,23 +326,26 @@ class Setup:
         if lo == {"diode"} and "fet" in up:
             return "out", "diode in the lower position (a buck)"
         _, far = switch_inductor(board, self.sw_net)
+        name = lambda n: n.upper().replace("/", "")       # noqa: E731
+        if self.other_leg(board):                  # 4-switch buck-boost: the rail says which leg this is
+            if any(w in name(self.rail_net) for w in INPUT_WORDS):
+                return "out", "the rail looks like the input (input leg of a 4-switch buck-boost)"
+            if self.rail_net in feedback_nets(board):
+                return "in", "the feedback divider is on the rail (output leg of a 4-switch buck-boost)"
         # the converter regulates its output: the feedback divider sits on it
         fb = feedback_nets(board)
         if far and self.rail_net in fb and far not in fb:
             return "in", "the feedback divider is on the supply side (a boost)"
         if far and far in fb and self.rail_net not in fb:
             return "out", "the feedback divider is on the inductor's far side (a buck)"
-        name = lambda n: n.upper().replace("/", "")       # noqa: E731
         if far and any(w in name(far) for w in INPUT_WORDS):
             return "in", "the inductor's far side looks like an input (a boost)"
-        return "out", "guessed (a buck); set it under Operating point if wrong"
+        return "out", "guessed (a buck); pick the topology if wrong"
 
     def active(self):
         """Positions that switch actively ('upper', 'lower')."""
-        if self.topology == "buck":
-            return ["upper"]
-        if self.topology == "boost":
-            return ["lower"]
+        if self.topology in TOPO_CTRL:
+            return [TOPO_CTRL[self.topology]]
         return [p for p in ("upper", "lower") if any(x.kind == "fet" for x in self.by_role(p))]
 
 
@@ -602,6 +690,30 @@ def feedback_nets(board):
             if len(ns) == 2 and ns & fbn:
                 out |= ns - fbn
     return out
+
+
+def _decoupled(board, net):
+    """True if a fitted capacitor joins net to a return-like net (an input or output; a switch node has
+    none)."""
+    for fp in board.footprints:
+        if fp.ref.startswith("C") and not fp.dnp:
+            ns = {p.net for p in _pads(board, fp.ref)}
+            if net in ns and any(_is_ret(board, n) for n in ns - {net}):
+                return True
+    return False
+
+
+def inductance(board, sw_net):
+    """The switch-node inductor's value from its Value field [H] (0 if none or not a number)."""
+    ref, _ = switch_inductor(board, sw_net)
+    fp = _fp(board, ref) if ref else None
+    if fp is None:
+        return 0.0
+    try:
+        v = parse_si(re.sub(r"\s*H$", "", fp.value.strip().split()[0] if fp.value.strip() else "", flags=re.I))
+    except (ValueError, IndexError):
+        return 0.0
+    return v if 1e-9 <= v <= 1.0 else 0.0
 
 
 def switch_inductor(board, sw_net):

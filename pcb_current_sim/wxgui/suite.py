@@ -19,6 +19,7 @@ from ..suite import stackup as ST
 from ..suite import tools as TL
 from ..suite.library import C_TOL_CODES, DIELECTRICS, KINDS, Part, fmt_si, parse_si
 from ..suite.session import Session
+from .layout import AutoList
 
 SHARED = (("stackup", "Stackup & materials…", "Copper, dielectric thickness, εr and tanδ against f"),
           ("library", "Component library…", "Real-part models: L, C, R with tolerance, Q, SRF, ESR, ESL"),
@@ -536,7 +537,7 @@ class LibraryFrame(wx.Frame):
             b.Bind(wx.EVT_BUTTON, lambda e, c=cmd: c())
             row.Add(b, 0, wx.LEFT, 4)
         top.Add(row, 0, wx.ALL, 6)
-        self.list = wx.ListCtrl(p, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self.list = AutoList(p, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         for k, (t, w) in enumerate(self.COLS):
             self.list.InsertColumn(k, t, width=w)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._edit())
@@ -690,7 +691,7 @@ class ResultsFrame(wx.Frame):
         row.Insert(0, wx.StaticText(p, label="Search in"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         row.Insert(1, self.root, 1, wx.EXPAND)
         top.Add(row, 0, wx.EXPAND | wx.ALL, 6)
-        self.list = wx.ListCtrl(p, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self.list = AutoList(p, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         for k, (t, w) in enumerate(self.COLS):
             self.list.InsertColumn(k, t, width=w)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._open())
@@ -747,7 +748,7 @@ class ExternalFrame(wx.Frame):
         self.session = session
         p = wx.Panel(self)
         top = wx.BoxSizer(wx.VERTICAL)
-        self.list = wx.ListCtrl(p, style=wx.LC_REPORT)
+        self.list = AutoList(p, style=wx.LC_REPORT)
         for k, (t, w) in enumerate((("Program", 130), ("Used by", 200), ("Found", 120), ("Path / Flatpak ref", 380))):
             self.list.InsertColumn(k, t, width=w)
         top.Add(self.list, 1, wx.EXPAND | wx.ALL, 6)

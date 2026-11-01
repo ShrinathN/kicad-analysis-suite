@@ -23,11 +23,14 @@ from ..loop import model as M  # noqa: E402
 from ..suite.library import fmt_si, parse_si  # noqa: E402
 from ..loop import advice as ADV  # noqa: E402
 from ..loop import checks as CK  # noqa: E402
+from ..loop import emi as EM  # noqa: E402
+from ..loop import snubber as SN  # noqa: E402
+from ..loop import losses as LS  # noqa: E402
 from ..loop import saved as SV  # noqa: E402
 from ..loop import transient as TR  # noqa: E402
 from .cellview import CellCanvas  # noqa: E402
 from .crossprobe import CrossProbe, selected_rows  # noqa: E402
-from .layout import refit, scrolled  # noqa: E402
+from .layout import AutoList, fit_columns, refit, scrolled  # noqa: E402
 from .suite import attach_suite_menu  # noqa: E402
 
 ROLES = {"upper": "Upper switch", "lower": "Lower switch", "cap": "Hot-loop cap", "gate_r": "Gate resistor",
@@ -53,8 +56,13 @@ OPTS = (("v_rail", "Voltage across the switches [V]", float,
          "Peak-to-peak inductor ripple: the switch turns on at I - ripple/2 and off at I + ripple/2 "
          "(0 = both edges at the mean current)"),
         ("f_sw", "Switching frequency [Hz]", "si",
-         "The converter's switching frequency: switching loss = (E_on + E_off) x f_sw"))
-MAIN_OPTS = ("v_rail", "i_switch", "i_ripple", "f_sw")      # the rest sit under "Advanced"
+         "The converter's switching frequency: switching loss = (E_on + E_off) x f_sw"),
+        ("duty", "Duty cycle (hard-switched switch on)", float,
+         "The fraction of each period the hard-switched switch is on: a buck V_out / V_in, a boost "
+         "1 - V_in / V_out. It sets the EMI spectrum's low harmonics and how the conduction loss splits "
+         "between the switches"))
+MAIN_OPTS = ("v_rail", "i_switch", "i_ripple", "f_sw", "duty")
+SN_W = 320               # px, the snubber designer's input column      # the rest sit under "Advanced"
 DIRS = (("auto", "Auto"), ("out", "Out of the switch node (buck, bridge sourcing)"),
         ("in", "Into the switch node (boost, bridge sinking)"))
 # model fields per kind: (key, label, unit)
@@ -190,7 +198,7 @@ class ModelDialog(wx.Dialog):
         pb = wx.StaticBoxSizer(wx.VERTICAL, self, "Pins (by net: all pads of the part on a net are one pin)")
         pbox = pb.GetStaticBox()
         pg = wx.FlexGridSizer(0, 2, 5, 8)
-        self.fp_nets = sorted({p.net for p in board.pads if p.ref == dev.ref and p.net})
+        self.fp_nets = sorted({p.net for p in board.pads if p.ref == dev.ref and p.net}, key=EL.natural_key)
         self.pin_ch = {}
         if dev.kind == "fet" and not dev.internal:
             self.channel = wx.Choice(pbox, choices=["N-channel", "P-channel"])
@@ -527,6 +535,84 @@ class AddPartDialog(wx.Dialog):
         return (self.refs[k] if k >= 0 else None), list(ADD_ROLES)[self.role.GetSelection()]
 
 
+CONV_FIELDS = (
+    ("v_in", "V_in", "V", "The converter's input voltage (a half-bridge: the bus voltage)"),
+    ("v_out", "V_out", "V", "The converter's output voltage (a half-bridge: the mean phase voltage, between 0 "
+                            "and the bus)"),
+    ("i_out", "I_out", "A", "The load current (a half-bridge: the phase current, positive out of the switch "
+                            "node, negative into it)"),
+    ("l_ind", "Inductance", "H", "The inductor's value; read from its Value field on the board when it is a "
+                                 "number. It sets the ripple (0 = no ripple)"),
+    ("f_sw", "f_sw", "Hz", "The switching frequency"),
+    ("eff", "Efficiency", "", "Used for a boost's input current (I_out x V_out / (V_in x efficiency)); 1 = "
+                              "ideal"))
+
+
+class ConverterDialog(wx.Dialog):
+    """The operating point (voltage across the switches, inductor current and ripple, duty cycle) from
+    the converter's V_in, V_out, I_out, L and f_sw (loop.operating)."""
+
+    def __init__(self, parent, board, s):
+        super().__init__(parent, title="Operating point from the converter")
+        from ..loop import operating as OP
+        self.OP, self.board, self.s = OP, board, s
+        self.topo = s.resolved(board)
+        self.out = None
+        l_board = M.inductance(board, s.sw_net)
+        vals = dict(v_in=s.v_in or (s.v_rail if M.TOPO_RAIL.get(self.topo) in ("input", "bus") else 0.0),
+                    v_out=s.v_out or (s.v_rail if M.TOPO_RAIL.get(self.topo) == "output" else 0.0),
+                    i_out=s.i_out, l_ind=s.l_ind or l_board, f_sw=s.f_sw, eff=s.eff)
+        name = M.TOPO_NAME.get(self.topo)
+        head = wx.StaticText(self, label=(f"{s.label(board)}: the formulas of a {name}." if name else
+                                          "The cell's kind is not known: pick the topology first."))
+        head.Wrap(420)
+        g = wx.FlexGridSizer(0, 2, 6, 8)
+        self.ctrls = {}
+        for key, label, unit, tip in CONV_FIELDS:
+            t = wx.TextCtrl(self, value=_num(float(vals[key]), unit), size=(130, -1))
+            t.SetToolTip(tip + (f". From the board: {fmt_si(l_board, 'H')}" if key == "l_ind" and l_board else ""))
+            t.Bind(wx.EVT_TEXT, lambda e: self._calc())
+            self.ctrls[key] = (t, unit)
+            g.AddMany([(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL), (t, 0)])
+        self.res = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP, size=(420, 170))
+        self.res.SetToolTip("What goes into the Operating point fields when you press OK")
+        top = wx.BoxSizer(wx.VERTICAL)
+        top.Add(head, 0, wx.ALL, 10)
+        top.Add(g, 0, wx.LEFT | wx.RIGHT, 10)
+        top.Add(self.res, 1, wx.EXPAND | wx.ALL, 10)
+        bs = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
+        top.Add(bs, 0, wx.EXPAND | wx.ALL, 10)
+        self.SetSizerAndFit(top)
+        self.Bind(wx.EVT_BUTTON, self._ok, id=wx.ID_OK)
+        self._calc()
+
+    def inputs(self):
+        return {k: _parse(t.GetValue(), unit) for k, (t, unit) in self.ctrls.items()}
+
+    def _calc(self):
+        try:
+            v = self.inputs()
+            self.out = self.OP.from_converter(self.topo, v["v_in"], v["v_out"], v["i_out"], v["l_ind"], v["f_sw"],
+                                              v["eff"] or 1.0, sync=self.s.synchronous(self.topo))
+        except ValueError as e:
+            self.out = None
+            self.res.SetValue(str(e))
+            return
+        o = self.out
+        lines = [f"Voltage across the switches: {o['v_rail']:.4g} V",
+                 f"Inductor current: {o['i_switch']:.4g} A, ripple {o['i_ripple']:.4g} A p-p "
+                 f"(edges at {max(o['i_switch'] - o['i_ripple'] / 2, 0):.3g} A and "
+                 f"{o['i_switch'] + o['i_ripple'] / 2:.3g} A)",
+                 f"Duty cycle: {o['duty']:.3g} ({o['mode']})",
+                 f"Current {'out of' if o['i_dir'] == 'out' else 'into'} the switch node"]
+        self.res.SetValue("\n".join(lines + [""] + o["notes"]))
+
+    def _ok(self, e):
+        if self.out is None:
+            return wx.MessageBox(self.res.GetValue(), "Operating point", parent=self)
+        e.Skip()
+
+
 class DriveDialog(wx.Dialog):
     """A FET's gate drive: the driver's output and return pins, its output resistance, and the series
     parts between the driver pin and the gate: resistors / beads on the board, or elements between
@@ -541,7 +627,8 @@ class DriveDialog(wx.Dialog):
         self.result = None
         top = wx.BoxSizer(wx.VERTICAL)
         g = wx.FlexGridSizer(0, 2, 6, 8)
-        fets = [d.key for d in setup.devices if d.kind == "fet" and not d.internal and d.nets.get("G")]
+        fets = sorted((d.key for d in setup.devices if d.kind == "fet" and not d.internal and d.nets.get("G")),
+                      key=EL.natural_key)
         self.fet = wx.Choice(self, choices=fets)
         if drive.fet in fets:
             self.fet.SetSelection(fets.index(drive.fet))
@@ -592,7 +679,7 @@ class DriveDialog(wx.Dialog):
         top.Add(g, 0, wx.EXPAND | wx.ALL, 10)
         sb = wx.StaticBoxSizer(wx.VERTICAL, self, "Series parts between the driver pin and the gate")
         sbox = sb.GetStaticBox()
-        self.lst = wx.ListCtrl(sbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(560, 150))
+        self.lst = AutoList(sbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(560, 150))
         for k, (t, w) in enumerate((("Part", 80), ("Kind", 110), ("Between", 220), ("R", 70), ("L", 70))):
             self.lst.InsertColumn(k, t, width=w)
         self.lst.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._edit())
@@ -617,7 +704,7 @@ class DriveDialog(wx.Dialog):
 
     def _nets(self, pc, nc, cur=None):
         k = pc.GetSelection()
-        nets = sorted({p.net for p in self.board.pads if k >= 0 and p.ref == self.refs[k] and p.net})
+        nets = sorted({p.net for p in self.board.pads if k >= 0 and p.ref == self.refs[k] and p.net}, key=EL.natural_key)
         nc.Set(nets)
         if cur in nets:
             nc.SetSelection(nets.index(cur))
@@ -734,6 +821,7 @@ class LoopFrame(wx.Frame):
         self.session = session
         self.board = session.board
         self.results, self._running, self._run_ci = {}, False, 0
+        self._snpos_keys = []
         self.cells, self.ci = self._load_cells()
         self._build()
         attach_suite_menu(self, session, "loop")
@@ -772,6 +860,8 @@ class LoopFrame(wx.Frame):
             d = {}
         if d.get("cells"):
             cells = [M.Setup.from_dict(c) for c in d["cells"]]
+            for c, x in zip(cells, d["cells"]):
+                c.baseline = x.get("baseline")         # results kept to compare with (Compare tab)
             return cells, min(max(int(d.get("current", 0)), 0), len(cells) - 1)
         if d.get("setup"):
             return [M.Setup.from_dict(d["setup"])], 0
@@ -787,7 +877,8 @@ class LoopFrame(wx.Frame):
             return
         try:
             SC.save_section(self.session.scenario_path, "loop",
-                            dict(cells=[c.to_dict() for c in self.cells], current=self.ci,
+                            dict(cells=[dict(c.to_dict(), baseline=getattr(c, "baseline", None)) for c in self.cells],
+                                 current=self.ci,
                                  setup=self.setup.to_dict()))
         except OSError as e:
             self._status(f"Could not save the setup: {e}")
@@ -822,16 +913,8 @@ class LoopFrame(wx.Frame):
 
     @staticmethod
     def _fit_columns(lc, stretch=None):
-        """Columns as wide as their header or widest entry; column `stretch` takes what is left."""
-        n = lc.GetColumnCount()
-        for c in range(n):
-            lc.SetColumnWidth(c, wx.LIST_AUTOSIZE)
-            w = lc.GetColumnWidth(c)
-            lc.SetColumnWidth(c, wx.LIST_AUTOSIZE_USEHEADER)
-            lc.SetColumnWidth(c, max(w, lc.GetColumnWidth(c)) + 6)
-        if stretch is not None:     # the stretch column takes the rest of the width (narrower if need be)
-            rest = lc.GetClientSize().width - sum(lc.GetColumnWidth(c) for c in range(n) if c != stretch)
-            lc.SetColumnWidth(stretch, max(rest, 70))
+        """Columns as wide as their header or widest entry; column `stretch` also takes what is left."""
+        fit_columns(lc, stretch)
 
     def _stretchy(self, lc, stretch):
         lc.Bind(wx.EVT_SIZE, lambda e: (e.Skip(), wx.CallAfter(self._fit_columns, lc, stretch)))
@@ -870,8 +953,11 @@ class LoopFrame(wx.Frame):
         self.sw.SetToolTip("The switch-node net: the node between the two switches and the inductor. Changing "
                            "it detects the cell's parts again")
         self.topo = wx.Choice(cbox, choices=list(M.TOPOLOGIES.values()))
-        self.topo.SetToolTip("The converter type; it names the switch positions (which part is the upper / lower "
-                             "switch)")
+        self.topo.SetToolTip("The converter type. It decides which switch is hard-switched (a buck's upper, a "
+                             "boost's lower), what the rail is (a buck's input, a boost's output), and the formulas "
+                             "of 'From the converter'. A 4-switch buck-boost is two cells, one per leg. Detect "
+                             "decides from the parts and the board")
+        self.topo.Bind(wx.EVT_CHOICE, lambda e: self._opts_changed())
         self.railc = wx.Choice(cbox, size=(230, -1))
         self.retc = wx.Choice(cbox, size=(230, -1))
         self.railc.SetToolTip("The supply side of the hot loop (also called the rail): the net the loop closes "
@@ -893,7 +979,7 @@ class LoopFrame(wx.Frame):
         self._buttons(cbox, cb, items)
 
         pb, pbox = self._box(left, ls, "Parts", grow=3)
-        self.plist = wx.ListCtrl(pbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 170))
+        self.plist = AutoList(pbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 170))
         for k, (t, w) in enumerate((("On", 32), ("Role", 100), ("Part", 60), ("Kind", 75), ("Pins", 200),
                                     ("Model", 200), ("mm", 40))):
             self.plist.InsertColumn(k, t, width=w)
@@ -908,7 +994,7 @@ class LoopFrame(wx.Frame):
                                  ("Remove", self._remove)])
 
         gb, gbox = self._box(left, ls, "Gate drives", grow=1)
-        self.glist = wx.ListCtrl(gbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 90))
+        self.glist = AutoList(gbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 90))
         for k, (t, w) in enumerate((("FET", 45), ("Gate loop", 300), ("Σ R", 65), ("R out", 65))):
             self.glist.InsertColumn(k, t, width=w)
         self.glist.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._edit_drive())
@@ -921,6 +1007,12 @@ class LoopFrame(wx.Frame):
                                  ("Remove", self._del_drive)])
 
         ob, obox = self._box(left, ls, "Operating point")
+        conv = wx.Button(obox, label="From the converter's V_in, V_out, I_out…")
+        conv.SetToolTip("Work out the voltage across the switches, the inductor current and ripple and the duty "
+                        "cycle from the converter's input and output voltage, load current, inductance and "
+                        "switching frequency, using the topology's formulas")
+        conv.Bind(wx.EVT_BUTTON, lambda e: self._converter())
+        ob.Add(conv, 0, wx.ALL, 4)
         g = wx.FlexGridSizer(0, 2, 4, 6)
         self.fields = {}
         adv = wx.CollapsiblePane(obox, label="Advanced (mesh and frequency range)",
@@ -976,6 +1068,14 @@ class LoopFrame(wx.Frame):
         self.run_b = wx.Button(left, label="Analyse")
         self.run_b.Bind(wx.EVT_BUTTON, lambda e: self._run())
         ls.Add(self.run_b, 0, wx.EXPAND | wx.ALL, 6)
+        self.reload_b = wx.Button(left, label="Save in KiCad, reload and analyse" if self.session.kicad is not None
+                                  else "Reload the board file and analyse")
+        self.reload_b.SetToolTip("After changing the layout: " + ("save the board in KiCad, " if self.session.kicad
+                                                                  is not None else "")
+                                 + "read it again and analyse this cell. Keep the results before the change as the "
+                                   "baseline (Compare tab) to see what the change did")
+        self.reload_b.Bind(wx.EVT_BUTTON, lambda e: self._reload_and_run())
+        ls.Add(self.reload_b, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         ls.Add(wx.StaticText(left, label=(
             "The copper of the cell's nets is meshed (every net a conductor,\n"
             "ground included) and its partial inductances solved (PEEC).\n"
@@ -1001,14 +1101,14 @@ class LoopFrame(wx.Frame):
         ss.Add(self.verdict, 0, wx.EXPAND | wx.ALL, 4)
         ss.Add(wx.StaticText(sm, label="Hot loop, per commutation (the part that turns off rings with its capacitance)"),
                0, wx.ALL, 4)
-        self.clist = wx.ListCtrl(sm, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 100))
+        self.clist = AutoList(sm, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 100))
         for k, (t, w) in enumerate((("Commutation", 170), ("Active", 55), ("L loop [nH]", 85), ("board", 65),
                                     ("parts", 65), ("R [mΩ]", 65), ("Ringing", 90), ("Q", 50), ("C [pF]", 65),
                                     ("di/dt [A/ns]", 85), ("Overshoot [V]", 95))):
             self.clist.InsertColumn(k, t, width=w)
         ss.Add(self.clist, 0, wx.EXPAND | wx.ALL, 4)
         ss.Add(wx.StaticText(sm, label="Gate loops"), 0, wx.ALL, 4)
-        self.gres = wx.ListCtrl(sm, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 100))
+        self.gres = AutoList(sm, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 100))
         for k, (t, w) in enumerate((("FET", 50), ("Driver", 60), ("L gate [nH]", 85), ("L common-source [nH]", 140),
                                     ("R gate [Ω]", 80), ("Gate ringing", 95), ("Q", 50))):
             self.gres.InsertColumn(k, t, width=w)
@@ -1020,7 +1120,7 @@ class LoopFrame(wx.Frame):
 
         sw = wx.Panel(nb)
         sws = wx.BoxSizer(wx.VERTICAL)
-        self.elist = wx.ListCtrl(sw, style=wx.LC_REPORT | wx.BORDER_SUNKEN | wx.LC_SINGLE_SEL, size=(-1, 105))
+        self.elist = AutoList(sw, style=wx.LC_REPORT | wx.BORDER_SUNKEN | wx.LC_SINGLE_SEL, size=(-1, 105))
         for k, (t, w) in enumerate((("Edge", 190), ("I [A]", 55), ("Peak [V]", 70), ("Overshoot [V]", 95),
                                     ("dv/dt [V/ns]", 90), ("di/dt [A/ns]", 90), ("Ringing", 85), ("Q", 45),
                                     ("Energy [µJ]", 85), ("Other gate peak [V]", 135), ("Recovery [A]", 95))):
@@ -1041,8 +1141,12 @@ class LoopFrame(wx.Frame):
         self.tsel.Bind(wx.EVT_CHOICE, lambda e: self._plot_edge(self.tsel.GetSelection()))
         b = wx.Button(sw, label="Export waveforms (CSV)…", style=wx.BU_EXACTFIT)
         b.Bind(wx.EVT_BUTTON, lambda e: self._export_edges())
+        bl = wx.Button(sw, label="Send losses to DC & Thermal…", style=wx.BU_EXACTFIT)
+        bl.SetToolTip("Put each switch's loss (switching + conduction at the duty cycle) as heat on its pads in DC & "
+                      "Thermal ('Heat at parts'), to see the board temperature they cause")
+        bl.Bind(wx.EVT_BUTTON, lambda e: self._send_losses())
         trow.AddMany([(wx.StaticText(sw, label="Edge"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6), (self.tsel, 0),
-                      (b, 0, wx.LEFT, 12)])
+                      (b, 0, wx.LEFT, 12), (bl, 0, wx.LEFT, 6)])
         sws.Add(trow, 0, wx.ALL, 4)
         self.tfig = Figure(figsize=(7, 6), constrained_layout=True)
         self.tcanvas = FigureCanvasWxAgg(sw, -1, self.tfig)
@@ -1052,6 +1156,8 @@ class LoopFrame(wx.Frame):
         sws.Add(ttb, 0, wx.EXPAND)
         sw.SetSizer(sws)
         nb.AddPage(sw, "Switching")
+        self._build_snubber(nb)
+        self._build_emi(nb)
 
         def plot_page(title, controls=()):
             p = wx.Panel(nb)
@@ -1107,10 +1213,133 @@ class LoopFrame(wx.Frame):
         s.Add(row, 0)
         sp_.SetSizer(s)
         nb.AddPage(sp_, "SPICE")
+        self._build_compare(nb)
 
         sp.SplitVertically(left, nb, 640)
         left.Bind(wx.EVT_SIZE, lambda e: (e.Skip(), self.canvas.Refresh()))
         sp.SetMinimumPaneSize(380)
+
+    def _build_snubber(self, nb):
+        outer = wx.Panel(nb)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        p = scrolled(outer)
+        p.SetMinSize((SN_W, -1))
+        p.SetMaxSize((SN_W, -1))
+        left = wx.BoxSizer(wx.VERTICAL)
+        g = wx.FlexGridSizer(0, 2, 4, 6)
+        self.snpos = wx.Choice(p, size=(215, -1))
+        self.snpos.SetToolTip("The switch the RC snubber goes across (drain-source, or a diode's cathode-anode). "
+                              "Usually the one that rings worst: in a buck the lower switch (it rings when the "
+                              "upper turns on), in a boost the upper")
+        self.snpos.Bind(wx.EVT_CHOICE, lambda e: self._snub_pos())
+        g.AddMany([(wx.StaticText(p, label="Across"), 0, wx.ALIGN_CENTER_VERTICAL), (self.snpos, 0)])
+        self.snf = {}
+        for key, label, unit, tip in (
+                ("r", "R_s", "Ω", "Snubber resistance. Near √(L/C_par) (the ring's impedance) damps the ring best; "
+                                  "the lower plot shows the overshoot and the ring's decay against R_s"),
+                ("c", "C_s", "F", "Snubber capacitance. 3-4x the switch's own capacitance C_par damps well; more "
+                                  "barely helps but costs loss (C_s V² f_sw)"),
+                ("esl", "ESL", "H", "The snubber's own inductance: its two parts and their mounting (about 1 nH for "
+                                    "two 0603 parts next to the switch, more if they are far from its pads)")):
+            t = wx.TextCtrl(p, size=(110, -1), style=wx.TE_PROCESS_ENTER)
+            t.SetToolTip(tip)
+            t.Bind(wx.EVT_KILL_FOCUS, lambda e: (e.Skip(), wx.CallAfter(self._plot_snubber)))
+            t.Bind(wx.EVT_TEXT_ENTER, lambda e: self._plot_snubber())
+            self.snf[key] = (t, unit)
+            g.AddMany([(wx.StaticText(p, label=label), 0, wx.ALIGN_CENTER_VERTICAL), (t, 0)])
+        left.Add(g, 0, wx.ALL, 6)
+        for text, fn, tip in (
+                ("Suggest values", self._snub_suggest, "R_s = √(L/C_par) and C_s = 3 C_par from this switch's "
+                                                       "ringing (the starting point most app notes give)"),
+                ("Put in the cell", self._snub_apply, "Add this snubber to the cell (or update the one across this "
+                                                      "switch); press Analyse to check it with the board's copper "
+                                                      "and the full switching simulation"),
+                ("Remove from the cell", self._snub_remove, "Take the snubber across this switch out of the cell")):
+            b = wx.Button(p, label=text)
+            b.SetToolTip(tip)
+            b.Bind(wx.EVT_BUTTON, lambda e, f=fn: f())
+            left.Add(b, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
+        self.sninfo = wx.TextCtrl(p, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_NONE, size=(SN_W - 24, 300))
+        self.sninfo.SetBackgroundColour(p.GetBackgroundColour())
+        left.Add(self.sninfo, 1, wx.EXPAND | wx.ALL, 6)
+        p.SetSizer(left)
+        row.Add(p, 0, wx.EXPAND)
+        self.snfig = Figure(figsize=(6, 5), constrained_layout=True)
+        self.sncanvas = FigureCanvasWxAgg(outer, -1, self.snfig)
+        tb = NavigationToolbar2WxAgg(self.sncanvas)
+        tb.Realize()
+        rs = wx.BoxSizer(wx.VERTICAL)
+        rs.Add(self.sncanvas, 1, wx.EXPAND)
+        rs.Add(tb, 0, wx.EXPAND)
+        row.Add(rs, 1, wx.EXPAND)
+        outer.SetSizer(row)
+        nb.AddPage(outer, "Snubber")
+
+    def _build_emi(self, nb):
+        p = wx.Panel(nb)
+        s = wx.BoxSizer(wx.VERTICAL)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.emif = {}
+        for key, label, unit, tip in (
+                ("c_cm", "Switch node to chassis", "F",
+                 "The switch node's capacitance to the chassis / earth (a heatsink tab, the enclosure, mounting "
+                 "holes, a cable shield): typically 1-30 pF, 10-50 pF with a grounded heatsink. It drives "
+                 "common-mode current into the mains LISNs (the conducted estimate). 0 = no estimate"),):
+            t = wx.TextCtrl(p, size=(80, -1), style=wx.TE_PROCESS_ENTER)
+            t.SetToolTip(tip)
+            t.Bind(wx.EVT_KILL_FOCUS, lambda e: (e.Skip(), wx.CallAfter(self._emi_changed)))
+            t.Bind(wx.EVT_TEXT_ENTER, lambda e: self._emi_changed())
+            self.emif[key] = (t, unit)
+            row.AddMany([(wx.StaticText(p, label=label), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8),
+                         (t, 0, wx.LEFT, 4)])
+        self.emil = wx.Choice(p, choices=list(M.EMI_LIMITS.values()))
+        self.emil.SetToolTip("The limit lines drawn. CISPR 32 (multimedia / IT equipment) class B is for homes, "
+                             "class A for industrial sites; measured at 10 m or 3 m (3 m limits are 10 dB higher). "
+                             "Other product standards (CISPR 25 cars, CISPR 11 industrial) differ")
+        self.emil.Bind(wx.EVT_CHOICE, lambda e: self._emi_changed())
+        row.AddMany([(wx.StaticText(p, label="Limit"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12),
+                     (self.emil, 0, wx.LEFT, 4)])
+        s.Add(row, 0, wx.ALL, 4)
+        self.emiinfo = wx.StaticText(p, label="")
+        s.Add(self.emiinfo, 0, wx.ALL, 6)
+        self.emifig = Figure(figsize=(7, 6), constrained_layout=True)
+        self.emicanvas = FigureCanvasWxAgg(p, -1, self.emifig)
+        tb = NavigationToolbar2WxAgg(self.emicanvas)
+        tb.Realize()
+        s.Add(self.emicanvas, 1, wx.EXPAND)
+        s.Add(tb, 0, wx.EXPAND)
+        p.SetSizer(s)
+        nb.AddPage(p, "EMI")
+
+    def _build_compare(self, nb):
+        p = wx.Panel(nb)
+        s = wx.BoxSizer(wx.VERTICAL)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        for text, fn, tip in (
+                ("Keep these results as the baseline", self._keep_baseline,
+                 "Store the current results of this cell (numbers, impedance and edge waveforms) to compare later "
+                 "runs with: change the layout in KiCad, then 'Save in KiCad, reload and analyse'"),
+                ("Clear the baseline", self._clear_baseline, "Forget the stored baseline of this cell")):
+            b = wx.Button(p, label=text)
+            b.SetToolTip(tip)
+            b.Bind(wx.EVT_BUTTON, lambda e, f=fn: f())
+            row.Add(b, 0, wx.ALL, 4)
+        s.Add(row, 0)
+        self.cmpinfo = wx.StaticText(p, label="")
+        s.Add(self.cmpinfo, 0, wx.ALL, 6)
+        self.cmplist = AutoList(p, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 260))
+        for k, (t, w) in enumerate((("Quantity", 330), ("Baseline", 100), ("Now", 100), ("Change", 120))):
+            self.cmplist.InsertColumn(k, t, width=w)
+        self.cmplist.SetToolTip("Green: better than the baseline, red: worse (by more than 2 %)")
+        s.Add(self.cmplist, 0, wx.EXPAND | wx.ALL, 4)
+        self.cmpfig = Figure(figsize=(7, 4), constrained_layout=True)
+        self.cmpcanvas = FigureCanvasWxAgg(p, -1, self.cmpfig)
+        tb = NavigationToolbar2WxAgg(self.cmpcanvas)
+        tb.Realize()
+        s.Add(self.cmpcanvas, 1, wx.EXPAND)
+        s.Add(tb, 0, wx.EXPAND)
+        p.SetSizer(s)
+        nb.AddPage(p, "Compare")
 
     def _drive_refs(self, gd):
         """The parts of a gate drive: the FET, the driver IC and the series parts (both pads' parts of
@@ -1136,7 +1365,7 @@ class LoopFrame(wx.Frame):
     def _to_ui(self):
         s = self.setup
         cands = M.switch_nets(self.board)
-        names = cands + sorted(n for n in self.board.nets if n not in cands)
+        names = cands + sorted((n for n in self.board.nets if n not in cands), key=EL.natural_key)
         self.sw_names = names
         self.sw.Set(names)
         if s.sw_net in names:
@@ -1144,13 +1373,16 @@ class LoopFrame(wx.Frame):
         self.topo.SetSelection(list(M.TOPOLOGIES).index(s.topology if s.topology in M.TOPOLOGIES else "auto"))
         self.cellc.Set([self._cell_name(c) for c in self.cells])
         self.cellc.SetSelection(self.ci)
-        all_nets = sorted(self.board.nets)
+        all_nets = sorted(self.board.nets, key=EL.natural_key)
         self.net_names = all_nets
         for ch, cur in ((self.railc, s.rail_net), (self.retc, s.ret_net)):
             ch.Set(all_nets)
             if cur in all_nets:
                 ch.SetSelection(all_nets.index(cur))
-        self.cell_info.SetLabel(s.label() if s.devices else "Pick the switch node and press Detect parts.")
+        info = s.label(self.board) if s.devices else "Pick the switch node and press Detect parts."
+        for sn in s.snubbers_on():
+            info += f"\nRC snubber across the {sn.pos} switch: {fmt_si(sn.r, 'Ω')}, {fmt_si(sn.c, 'F')} (Snubber tab)."
+        self.cell_info.SetLabel(info)
         self.plist.DeleteAllItems()
         order = {"upper": 0, "lower": 1, "link": 2, "cap": 3, "gate_r": 4}
         self._rows = sorted(range(len(s.devices)), key=lambda k: (order.get(s.devices[k].role, 9),
@@ -1181,12 +1413,16 @@ class LoopFrame(wx.Frame):
         for key, (t, kind) in self.fields.items():
             v = getattr(s, key)
             t.SetValue(fmt_si(v) if kind == "si" else f"{v:g}")
+        self._emi_ui()
+        pos = self._snub_positions()
+        if [p for p, _ in pos] != self._snpos_keys:
+            self._show_snubber()
         self._relayout()
 
     def _refresh_checks(self):
         """The Checks box: one line per issue, worst first, each with its fix button."""
         self.ksizer.Clear(delete_windows=True)
-        issues = CK.check(self.board, self.setup)
+        issues = CK.check(self.board, self.setup, cells=[c.sw_net for c in self.cells if c is not self.setup])
         if not issues:
             issues = [CK.Issue("ok", "Ready: nothing missing.")]
         sym = {"error": ("✖", wx.Colour(210, 50, 50)), "warn": ("⚠", wx.Colour(214, 140, 0)),
@@ -1216,15 +1452,24 @@ class LoopFrame(wx.Frame):
     def _dir_label(self):
         s = self.setup
         txt = "Auto"
-        if s.sw_net and s.i_dir == "auto":
+        fixed = s.topology in M.TOPO_CTRL
+        if s.sw_net and (s.i_dir == "auto" or fixed):
             d, why = s.current_dir(self.board)
-            txt = f"Auto: {'out of' if d == 'out' else 'into'} the switch node ({why})"
+            txt = f"{'From the topology' if fixed else 'Auto'}: {'out of' if d == 'out' else 'into'} the switch node" \
+                  + ("" if fixed else f" ({why})")
         self.dirc.SetString(0, txt)
-        self.dirc.SetSelection([k for k, _ in DIRS].index(s.i_dir) if s.i_dir in dict(DIRS) else 0)
+        self.dirc.SetSelection(0 if fixed else [k for k, _ in DIRS].index(s.i_dir) if s.i_dir in dict(DIRS) else 0)
+        self.dirc.Enable(not fixed)
 
     def _opts_changed(self):
         if self and self._from_ui(quiet=True):
+            if not 0 <= self.setup.duty <= 1:
+                self.setup.duty = min(max(self.setup.duty, 0.0), 1.0)
+                self.fields["duty"][0].SetValue(f"{self.setup.duty:g}")
+            self._emi_changed()            # the duty cycle shapes the spectrum
             self._dir_label()
+            if self.setup.devices:
+                self.cell_info.SetLabel(self.setup.label(self.board))
             self.canvas.update(self.setup, self.board)
             self._refresh_checks()
 
@@ -1256,6 +1501,10 @@ class LoopFrame(wx.Frame):
             self._select_keys([d.key for d in s.devices if d.kind == "cap"])
         elif kind == "add":
             self._add(role=arg)
+        elif kind == "opt" and arg == "topology":
+            self.topo.SetFocus()
+        elif kind == "cell":
+            self._new_cell(arg)
         elif kind == "opt" and arg in ("i_dir", "transient"):
             (self.dirc if arg == "i_dir" else self.tran).SetFocus()
         elif kind == "opt":
@@ -1313,7 +1562,8 @@ class LoopFrame(wx.Frame):
         s.adaptive = self.adaptive.GetValue()
         s.transient = self.tran.GetValue()
         s.simulator = ["auto", "builtin", "ngspice"][max(self.simc.GetSelection(), 0)]
-        s.i_dir = DIRS[max(self.dirc.GetSelection(), 0)][0]
+        if self.dirc.IsEnabled():
+            s.i_dir = DIRS[max(self.dirc.GetSelection(), 0)][0]
         return True
 
     def _selected(self):
@@ -1343,7 +1593,8 @@ class LoopFrame(wx.Frame):
             return wx.MessageBox(str(e), "Detect", parent=self)
         self._from_ui(quiet=True)
         for key in ("v_rail", "margin", "cells", "f_min", "f_max", "adaptive", "i_switch", "name", "i_ripple",
-                    "f_sw", "i_dir", "transient", "simulator"):
+                    "f_sw", "i_dir", "transient", "simulator", "topology", "duty", "v_in", "v_out", "i_out", "l_ind",
+                    "eff"):
             setattr(new, key, getattr(self.setup, key))
         self.setup = new
         note = self._apply_saved(new)
@@ -1374,22 +1625,46 @@ class LoopFrame(wx.Frame):
         self._to_ui()
         self._show_or_clear()
 
-    def _new_cell(self):
+    def _converter(self):
+        """Operating point from the converter's terms (ConverterDialog)."""
+        if not self._from_ui():
+            return
+        s = self.setup
+        with ConverterDialog(self, self.board, s) as dlg:
+            if dlg.ShowModal() != wx.ID_OK or dlg.out is None:
+                return
+            v, o = dlg.inputs(), dlg.out
+        s.v_in, s.v_out, s.i_out, s.l_ind, s.f_sw, s.eff = (v["v_in"], v["v_out"], v["i_out"], v["l_ind"],
+                                                           v["f_sw"], v["eff"] or 1.0)
+        s.v_rail, s.i_switch, s.i_ripple, s.duty = o["v_rail"], o["i_switch"], o["i_ripple"], o["duty"]
+        if s.topology not in M.TOPO_CTRL:
+            s.i_dir = o["i_dir"]
+        if not o["switching"]:
+            s.transient = False
+        self.results.pop(self.ci, None)
+        self._to_ui()
+        self._show_or_clear()
+        self._status(f"Operating point: {s.v_rail:.4g} V, {s.i_switch:.4g} A ± {s.i_ripple / 2:.3g} A, duty "
+                     f"{s.duty:.3g} ({o['mode']}).")
+
+    def _new_cell(self, net=None):
         used = {c.sw_net for c in self.cells}
         cands = [n for n in M.switch_nets(self.board) if n not in used]
-        names = cands + sorted(n for n in self.board.nets if n not in cands and n not in used)
-        with wx.SingleChoiceDialog(self, "Switch node of the new cell (nets joining an inductor and a "
-                                         "switch first):", "New cell", names) as dlg:
-            if dlg.ShowModal() != wx.ID_OK:
-                return
-            net = names[dlg.GetSelection()]
+        names = cands + sorted((n for n in self.board.nets if n not in cands and n not in used), key=EL.natural_key)
+        if net is None:
+            with wx.SingleChoiceDialog(self, "Switch node of the new cell (nets joining an inductor and a "
+                                             "switch first):", "New cell", names) as dlg:
+                if dlg.ShowModal() != wx.ID_OK:
+                    return
+                net = names[dlg.GetSelection()]
         try:
             new = M.detect(self.board, net)
         except ValueError as e:
             wx.MessageBox(f"{e}\n\nThe cell is created empty: add its parts by hand.", "New cell", parent=self)
             new = M.Setup(sw_net=net)
         self._from_ui(quiet=True)
-        for key in ("v_rail", "margin", "cells", "f_min", "f_max", "adaptive"):
+        for key in ("v_rail", "margin", "cells", "f_min", "f_max", "adaptive", "f_sw", "v_in", "v_out", "i_out",
+                    "l_ind", "eff"):
             setattr(new, key, getattr(self.setup, key))
         self._apply_saved(new)
         self.cells.append(new)
@@ -1422,9 +1697,12 @@ class LoopFrame(wx.Frame):
         self.tsel.Set([])
         self.tinfo.SetLabel("")
         for fig, canvas in ((self.bfig, self.bcanvas), (self.zfig, self.zcanvas), (self.mfig, self.mcanvas),
-                            (self.tfig, self.tcanvas)):
+                            (self.tfig, self.tcanvas), (self.emifig, self.emicanvas)):
             fig.clf()
             canvas.draw()
+        self.emiinfo.SetLabel("")
+        self._show_snubber()
+        self._show_compare()
 
     def _from_kicad(self):
         try:
@@ -1541,6 +1819,7 @@ class LoopFrame(wx.Frame):
                 if setup.transient and setup.i_switch > 0:
                     try:
                         r.edges, r.tran = TR.run(board, setup, r, progress=lambda m: wx.CallAfter(self._status, m))
+                        r.emi = EM.analyse(r, setup)
                     except (ValueError, RuntimeError) as e:
                         r.tran_error = str(e)
                 wx.CallAfter(self._done, r, None)
@@ -1581,7 +1860,7 @@ class LoopFrame(wx.Frame):
         self._fit_columns(self.clist)
         self._fit_columns(self.gres)
         s = M.Setup.from_dict(r.setup)
-        lines = [f"{s.label()}: switch node {s.sw_net}, rail {s.rail_net}, return {s.ret_net}; {s.v_rail:g} V across the switch.",
+        lines = [f"{s.label(self.board)}: switch node {s.sw_net}, rail {s.rail_net}, return {s.ret_net}; {s.v_rail:g} V across the switch.",
                  f"Mesh: {r.cells} copper cells at {r.pitch:g} mm, {r.bars} current bars, {r.meshes} mesh currents, "
                  f"window {r.window[2] - r.window[0]:.0f} x {r.window[3] - r.window[1]:.0f} mm.",
                  "",
@@ -1617,6 +1896,9 @@ class LoopFrame(wx.Frame):
         self.mlay.SetSelection(0)
         self.spice.SetValue(r.spice)
         self._show_edges()
+        self._show_snubber()
+        self._plot_emi()
+        self._show_compare()
         self._plot_breakdown()
         self._plot_z()
         self._plot_map()
@@ -1725,6 +2007,37 @@ class LoopFrame(wx.Frame):
                 w.writerow([])
         self._status(f"Saved {path}")
 
+    def _send_losses(self):
+        r = self.res
+        if not r:
+            return self._status("Analyse first.")
+        s = M.Setup.from_dict(r.setup)
+        s.duty = self.setup.duty
+        rows, notes = LS.part_losses(self.board, s, r.tran or None)
+        if not rows:
+            return wx.MessageBox("No losses: give the inductor current (Operating point) and analyse.",
+                                 "Send losses", parent=self)
+        txt = "\n".join(f"  {ref}: {w:.3g} W  ({what})" for ref, w, what in rows)
+        msg = (f"Heat at parts for DC & Thermal (duty {s.duty:g}, {s.i_switch:g} A, ripple {s.i_ripple:g} A):\n\n"
+               f"{txt}\n\n" + ("\n".join(notes) + "\n\n" if notes else "")
+               + "These replace the heat of the same parts there. Run DC & Thermal (with thermal on) to see "
+                 "the temperatures.")
+        if wx.MessageBox(msg, "Send losses to DC & Thermal", wx.OK | wx.CANCEL, self) != wx.OK:
+            return
+        new = [dict(ref=ref, W=round(w, 4), note=f"Switching Loop: {what}") for ref, w, what in rows]
+        refs = {x["ref"] for x in new}
+        dc = self.session.windows.get("dc")
+        if dc:
+            dc.settings.part_heat = [x for x in dc.settings.part_heat if x.get("ref") not in refs] + new
+            dc._heat_label()
+        if self.session.scenario_path:
+            sec = SC.section(self.session.scenario_path, "dc")
+            st = dict(sec.get("settings") or {})
+            st["part_heat"] = [x for x in st.get("part_heat", []) if x.get("ref") not in refs] + new
+            sec["settings"] = st
+            SC.save_section(self.session.scenario_path, "dc", sec)
+        self._status(f"Sent {sum(w for _, w, _ in rows):.3g} W on {', '.join(refs)} to DC & Thermal (Heat at parts).")
+
     def _plot_breakdown(self):
         r = self.res
         if not r:
@@ -1808,6 +2121,379 @@ class LoopFrame(wx.Frame):
         ax.set_title(f"{r.commutations[k]['title']} - {L} - at {fmt_si(r.commutations[k]['f_eval'], 'Hz')} "
                      f"(mesh {r.pitch_min:g} mm finest)", fontsize=9)
         self.mcanvas.draw()
+
+    # ------------------------------------------------------------- snubber designer
+    def _snub_positions(self):
+        """[(position, label)] of the cell's switching positions."""
+        s = self.setup
+        out = []
+        for pos in ("upper", "lower"):
+            d = s.main_part(pos)
+            if d is not None:
+                out.append((pos, f"{d.key} ({pos} switch)"))
+        return out
+
+    def _snub_inputs(self):
+        """Lumped values for the chosen position from the result: dict or None (with the reason)."""
+        r = self.res
+        if not r:
+            return None, "Analyse first: the designer starts from this switch's ringing."
+        pos = self._snpos_keys[self.snpos.GetSelection()] if self.snpos.GetSelection() >= 0 else None
+        c = next((c for c in r.commutations if c["off"] == pos), None)
+        if c is None or not math.isfinite(c.get("C_par_pF", math.nan)):
+            return None, "No ringing found across this switch (the impedance has no peak in the sweep)."
+        rs = M.Setup.from_dict(r.setup)
+        d = rs.main_part(pos)
+        e = next((e for e in r.edges if d is not None and e.metrics.get("blocking") == d.key), None)
+        if e is not None:
+            I, didt, src = e.current, e.metrics["didt_A_ns"] * 1e9, f"the simulated turn-{e.kind} edge"
+        elif math.isfinite(c.get("didt_A_ns", math.nan)) and rs.i_switch > 0:
+            I, didt, src = rs.i_switch, c["didt_A_ns"] * 1e9, c["didt_from"]
+        else:
+            I, didt, src = (rs.i_switch or 1.0), 1e9, "assumed 1 A/ns (simulate the edges for the real one)"
+        return dict(pos=pos, key=d.key if d else pos, L=c["L_total_nH"] * 1e-9, R=max(c["R_mOhm"] * 1e-3, 1e-4),
+                    C=c["C_par_pF"] * 1e-12, f0=c["f_ring_bare"], Q=c["Q_bare"], V=rs.v_rail, I=I, didt=didt,
+                    src=src, f_sw=rs.f_sw), ""
+
+    def _snub_values(self):
+        out = {}
+        for key, (t, unit) in self.snf.items():
+            try:
+                out[key] = _parse(t.GetValue(), unit)
+            except ValueError:
+                out[key] = None
+        return out
+
+    def _snub_set(self, r, c, esl):
+        for key, v in (("r", r), ("c", c), ("esl", esl)):
+            t, unit = self.snf[key]
+            t.SetValue(fmt_si(v, unit))
+
+    def _show_snubber(self):
+        """Fill the designer for the current cell (its snubber, else suggested values)."""
+        pos = self._snub_positions()
+        self._snpos_keys = [p for p, _ in pos]
+        self.snpos.Set([lab for _, lab in pos])
+        if not pos:
+            return
+        ex = self.setup.snubbers_on()
+        want = ex[0].pos if ex else None
+        if want is None and self.res and self.res.edges:      # the switch that rings worst
+            worst = max(self.res.edges, key=lambda e: e.metrics.get("overshoot", 0))
+            d = self.setup.device(worst.metrics.get("blocking", ""))
+            want = d.role if d is not None else None
+        k = self._snpos_keys.index(want) if want in self._snpos_keys else 0
+        self.snpos.SetSelection(k)
+        self._snub_pos()
+
+    def _snub_pos(self):
+        pos = self._snpos_keys[self.snpos.GetSelection()] if self.snpos.GetSelection() >= 0 else None
+        sn = next((x for x in self.setup.snubbers if x.pos == pos), None)
+        if sn is not None:
+            self._snub_set(sn.r, sn.c, sn.esl)
+        else:
+            self._snub_suggest(plot=False)
+        self._plot_snubber()
+
+    def _snub_suggest(self, plot=True):
+        x, _ = self._snub_inputs()
+        if x is None:
+            if not self.snf["r"][0].GetValue():
+                self._snub_set(2.0, 1e-9, 1e-9)
+        else:
+            r, c = SN.suggest(x["L"], x["C"])
+            self._snub_set(float(f"{r:.2g}"), float(f"{c:.2g}"), self._snub_values().get("esl") or 1e-9)
+        if plot:
+            self._plot_snubber()
+
+    def _snub_apply(self):
+        pos = self._snpos_keys[self.snpos.GetSelection()] if self.snpos.GetSelection() >= 0 else None
+        v = self._snub_values()
+        if pos is None or None in v.values() or v["c"] <= 0:
+            return wx.MessageBox("Give R_s, C_s and ESL (for example 2.2 Ω, 1 nF, 1 nH).", "Snubber", parent=self)
+        s = self.setup
+        s.snubbers = [x for x in s.snubbers if x.pos != pos] + [M.Snubber(pos=pos, r=v["r"], c=v["c"], esl=v["esl"])]
+        self.save()
+        self._to_ui()
+        self._status(f"Snubber across the {pos} switch is in the cell: press Analyse to check it on the board.")
+
+    def _snub_remove(self):
+        pos = self._snpos_keys[self.snpos.GetSelection()] if self.snpos.GetSelection() >= 0 else None
+        s = self.setup
+        if not any(x.pos == pos for x in s.snubbers):
+            return self._status("No snubber across this switch in the cell.")
+        s.snubbers = [x for x in s.snubbers if x.pos != pos]
+        self.save()
+        self._to_ui()
+        self._status(f"Snubber across the {pos} switch removed: press Analyse to update the results.")
+
+    def _plot_snubber(self):
+        if not self:
+            return
+        self.snfig.clf()
+        x, why = self._snub_inputs()
+        v = self._snub_values()
+        if x is None or None in v.values():
+            self.sninfo.SetValue(why or "Give R_s, C_s and ESL.")
+            self.sncanvas.draw()
+            return
+        sn = (v["r"], v["c"], v["esl"])
+        t0, v0 = SN.response(x["L"], x["R"], x["C"], x["V"], x["I"], x["didt"])
+        t1, v1 = SN.response(x["L"], x["R"], x["C"], x["V"], x["I"], x["didt"], sn, t_end=t0[-1])
+        m0, m1 = SN.metrics(t0, v0, x["V"]), SN.metrics(t1, v1, x["V"])
+        ax = self.snfig.add_subplot(211)
+        ax.plot(t0 * 1e9, v0, lw=1, color="0.5", label=f"no snubber: peak {m0['V_peak']:.1f} V")
+        ax.plot(t1 * 1e9, v1, lw=1.3, color="C0", label=f"with it: peak {m1['V_peak']:.1f} V")
+        ax.axhline(x["V"], color="0.6", ls="--", lw=0.8)
+        ax.set_xlabel("time [ns]")
+        ax.set_ylabel(f"V across {x['key']} [V]")
+        ax.set_title("Turn-off, lumped model (loop L and R, the switch's C, the snubber)", fontsize=9)
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        z0 = math.sqrt(x["L"] / x["C"])
+        rs = np.geomspace(0.1 * z0, 10 * z0, 36)
+        sw = SN.sweep(x["L"], x["R"], x["C"], x["V"], x["I"], x["didt"], v["c"], v["esl"], rs)
+        a2 = self.snfig.add_subplot(212)
+        a2.semilogx([p[0] for p in sw], [p[1] for p in sw], color="C0", label="overshoot [V]")
+        a2.set_xlabel("R_s [Ω]")
+        a2.set_ylabel("overshoot [V]", color="C0")
+        a3 = a2.twinx()
+        a3.semilogx([p[0] for p in sw], [p[2] * 1e9 for p in sw], color="C1", label="ring lasts [ns] (to 5 %)")
+        a3.set_ylabel("ring [ns]", color="C1")
+        a2.axvline(v["r"], color="C3", lw=1, label=f"R_s {fmt_si(v['r'], 'Ω')}")
+        a2.axvline(z0, color="0.5", ls=":", lw=1)
+        a2.set_title(f"Against R_s at C_s = {fmt_si(v['c'], 'F')} (dotted: √(L/C_par))", fontsize=9)
+        a2.grid(alpha=0.3, which="both")
+        h2, l2 = a2.get_legend_handles_labels()
+        h3, l3 = a3.get_legend_handles_labels()
+        a2.legend(h2 + h3, l2 + l3, fontsize=8, loc="upper center")
+        self.sncanvas.draw()
+        p_loss = v["c"] * x["V"] ** 2 * x["f_sw"]
+        self.sninfo.SetValue(
+            f"Across {x['key']}: loop {x['L'] * 1e9:.2f} nH, C_par {x['C'] * 1e12:.0f} pF, rings at "
+            f"{x['f0'] / 1e6:.0f} MHz (Q {x['Q']:.0f}) without a snubber; √(L/C_par) = {z0:.2f} Ω.\n\n"
+            f"Edge: {x['I']:.3g} A at {x['didt'] * 1e-9:.2f} A/ns ({x['src']}).\n\n"
+            f"C_s / C_par = {v['c'] / x['C']:.1f}. Loss in R_s: C_s V² f_sw = {p_loss:.3g} W (rate R_s for it; "
+            f"C_s for ≥ {1.5 * m1['V_peak']:.0f} V).\n\n"
+            f"Peak {m0['V_peak']:.1f} → {m1['V_peak']:.1f} V; the ring lasts {m0['t_settle'] * 1e9:.0f} → "
+            f"{m1['t_settle'] * 1e9:.0f} ns.\n\n"
+            "This is a lumped estimate: 'Put in the cell' and Analyse checks it with the board's copper and the "
+            "full switching simulation (the snubber placed at the switch's pads).")
+
+
+    # ------------------------------------------------------------- EMI
+    def _emi_ui(self):
+        s = self.setup
+        self.emif["c_cm"][0].SetValue(fmt_si(s.c_cm, "F") if s.c_cm > 0 else "0")
+        keys = list(M.EMI_LIMITS)
+        self.emil.SetSelection(keys.index(s.emi_limit) if s.emi_limit in keys else 0)
+
+    def _emi_changed(self):
+        if not self:
+            return
+        s = self.setup
+        try:
+            c_cm = _parse(self.emif["c_cm"][0].GetValue() or "0", "F")
+        except ValueError as e:
+            return self._status(f"EMI: {e}")
+        duty = s.duty
+        lim = list(M.EMI_LIMITS)[max(self.emil.GetSelection(), 0)]
+        r = self.res
+        if (c_cm, lim) == (s.c_cm, s.emi_limit) and \
+                (r is None or (r.setup.get("duty"), r.setup.get("c_cm"), r.setup.get("emi_limit")) == (duty, c_cm, lim)):
+            return
+        s.c_cm, s.emi_limit = c_cm, lim
+        if r and r.edges:
+            r.setup.update(duty=duty, c_cm=c_cm, emi_limit=lim)
+            r.emi = EM.analyse(r, M.Setup.from_dict(r.setup))
+            self.verdict.SetValue("\n".join(ADV.verdict(r)).strip())
+            self._plot_emi()
+
+    def _plot_emi(self):
+        r = self.res
+        self.emifig.clf()
+        x = r.emi if r else None
+        if not x:
+            self.emiinfo.SetLabel("Simulate the switching edges (Operating point) to see the spectrum." if r else "")
+            self.emicanvas.draw()
+            return
+        s = M.Setup.from_dict(r.setup)
+        f = x["f"]
+        ax1 = self.emifig.add_subplot(311)
+        ax1.semilogx(f, EM.db_uv(x["v_amp"]), lw=0.8, color="C0", label="harmonics")
+        ax1.semilogx(f, EM.db_uv(x["envelope"]), lw=1, ls="--", color="0.4", label="trapezoid bound")
+        for c in r.commutations:
+            if math.isfinite(c["f_ring"]):
+                ax1.axvline(c["f_ring"], color="C3", lw=0.7, alpha=0.6)
+        ax1.set_ylabel("dBµV")
+        ax1.set_title(f"Switch node against the return ({s.f_sw / 1e3:g} kHz, duty {s.duty:g}; red: ringing)",
+                      fontsize=9)
+        lo = max(f[0], 1e4)
+        ax1.set_xlim(lo, min(f[-1], 1e9))
+        ax1.set_ylim(bottom=max(np.nanmin(EM.db_uv(x["v_amp"][f <= 1e9])), 0))
+        ax2 = self.emifig.add_subplot(312)
+        ax2.semilogx(x["rad_f"], x["rad_db"], lw=0.9, color="C0", label="hot loop (estimate)")
+        ax2.semilogx(x["rad_f"], x["rad_limit"], lw=1.4, color="C3", label="limit (QP)")
+        ax2.set_ylabel("dBµV/m")
+        ax2.set_title(f"Radiated at {x['distance']:g} m, from the hot loop ({x['area_mm2']:.0f} mm² effective "
+                      "area); cables not included", fontsize=9)
+        ax3 = self.emifig.add_subplot(313)
+        if x["cond_db"] is not None:
+            ax3.semilogx(x["cond_f"], x["cond_db"], lw=0.9, color="C0", label="common mode (estimate)")
+        else:
+            ax3.text(0.5, 0.5, "Give the switch node's capacitance to the chassis for this estimate",
+                     ha="center", va="center", transform=ax3.transAxes, fontsize=9, color="0.4")
+        ax3.semilogx(x["cond_f"], x["cond_qp"], lw=1.4, color="C3", label="limit (QP)")
+        ax3.semilogx(x["cond_f"], x["cond_av"], lw=1, ls="--", color="C3", label="limit (average)")
+        ax3.set_ylabel("dBµV")
+        ax3.set_xlabel("frequency [Hz]")
+        ax3.set_title(f"Conducted on the mains (LISN), through {fmt_si(s.c_cm, 'F') if s.c_cm > 0 else '-'} to "
+                      "the chassis; before any input filter", fontsize=9)
+        for ax in (ax1, ax2, ax3):
+            ax.grid(alpha=0.3, which="both")
+            ax.legend(fontsize=7, loc="upper right")
+        self.emicanvas.draw()
+        txt = []
+        if math.isfinite(x.get("rad_margin", math.nan)):
+            m = x["rad_margin"]
+            txt.append(f"Radiated: {abs(m):.0f} dB {'over' if m < 0 else 'under'} the limit at "
+                       f"{x['rad_at'] / 1e6:.0f} MHz.")
+        if x["cond_db"] is not None and math.isfinite(x.get("cond_margin", math.nan)):
+            m = x["cond_margin"]
+            txt.append(f"Conducted: {abs(m):.0f} dB {'over' if m < 0 else 'under'} the QP limit at "
+                       f"{x['cond_at'] / 1e6:.2g} MHz.")
+        txt.append("An indicator, not a test: peak sum in the receiver bandwidth, worst direction, +6 dB ground "
+                   "reflection; cables usually radiate more than the board itself.")
+        self.emiinfo.SetLabel("  ".join(txt))
+        self.emiinfo.Wrap(900)
+        self.emiinfo.GetParent().Layout()
+
+    # ------------------------------------------------------------- baseline / compare
+    @staticmethod
+    def _snapshot(r):
+        """The numbers and curves of a result to compare later runs with (JSON-friendly)."""
+        s = M.Setup.from_dict(r.setup)
+        rows = []          # (name, value, unit, better: -1 lower is better, +1 higher, 0 neither)
+        for c in r.commutations:
+            who = LoopFrame._comm_short(s, c)
+            rows += [(f"{who}: loop L", c["L_total_nH"], "nH", -1), (f"{who}: board copper L", c["L_board_nH"], "nH", -1),
+                     (f"{who}: ringing", c["f_ring"] / 1e6, "MHz", 0), (f"{who}: Q of the ring", c["Q"], "", -1),
+                     (f"{who}: loop area", c.get("A_loop_mm2", math.nan), "mm²", -1)]
+        for g in r.gates:
+            rows += [(f"{g['fet']}: gate loop L", g["L_gate_nH"], "nH", -1),
+                     (f"{g['fet']}: common-source L", g["L_cs_nH"], "nH", -1)]
+        for e in r.edges:
+            m = e.metrics
+            who = f"{e.switch} turns {e.kind}"
+            rows += [(f"{who}: peak V", m["V_peak"], "V", -1), (f"{who}: dv/dt", m["dvdt_V_ns"], "V/ns", 0),
+                     (f"{who}: di/dt", m["didt_A_ns"], "A/ns", 0), (f"{who}: energy", m["E_uJ"], "µJ", -1)]
+            if "vgs_other_peak" in m:
+                rows.append((f"{who}: {e.other} gate peak", m["vgs_other_peak"], "V", -1))
+        if r.tran:
+            rows.append(("Switching loss", r.tran["P_sw_W"], "W", -1))
+        if r.emi:
+            if math.isfinite(r.emi.get("rad_margin", math.nan)):
+                rows.append(("Radiated margin to the limit", r.emi["rad_margin"], "dB", 1))
+            if r.emi.get("cond_db") is not None:
+                rows.append(("Conducted margin to the limit", r.emi["cond_margin"], "dB", 1))
+        rows = [(n, float(v) if v is not None and math.isfinite(v) else None, u, b) for n, v, u, b in rows]
+        k = np.unique(np.linspace(0, len(r.freqs) - 1, 121).astype(int))
+        z = [dict(title=LoopFrame._comm_short(s, c), f=r.freqs[k].tolist(), z=np.abs(c["Z_ring"])[k].tolist())
+             for c in r.commutations]
+        waves = []
+        for e in r.edges:
+            step = max(len(e.t) // 1500, 1)
+            waves.append(dict(title=f"{e.switch} turns {e.kind}", t=(e.t[::step] * 1e9).tolist(),
+                              v=e.v_sw[::step].tolist()))
+        import time
+        return dict(when=time.strftime("%Y-%m-%d %H:%M"), rows=rows, z=z, waves=waves)
+
+    @staticmethod
+    def _comm_short(s, c):
+        return ", ".join(x.key for x in s.by_role(c["off"])) + " off"
+
+    def _keep_baseline(self):
+        if not self.res:
+            return self._status("Analyse first: the baseline is a result.")
+        self.setup.baseline = self._snapshot(self.res)
+        self.save()
+        self._show_compare()
+        self._status("Baseline kept: change the layout, then 'Save in KiCad, reload and analyse'.")
+
+    def _clear_baseline(self):
+        self.setup.baseline = None
+        self.save()
+        self._show_compare()
+
+    def _show_compare(self):
+        b = getattr(self.setup, "baseline", None)
+        r = self.res
+        self.cmplist.DeleteAllItems()
+        self.cmpfig.clf()
+        if not b:
+            self.cmpinfo.SetLabel("No baseline yet: analyse, press 'Keep these results as the baseline', change the "
+                                  "layout (or the parts), and analyse again.")
+            self.cmpcanvas.draw()
+            return
+        now = {n: (v, u, bt) for n, v, u, bt in self._snapshot(r)["rows"]} if r else {}
+        self.cmpinfo.SetLabel(f"Baseline from {b['when']}" + ("" if r else "; analyse to compare with it."))
+        good, bad = wx.Colour(30, 140, 50), wx.Colour(200, 40, 40)
+        for n, v0, u, better in b["rows"]:
+            v1 = now.get(n, (None,))[0]
+            fmtv = lambda v: "-" if v is None else f"{v:.3g} {u}".strip()     # noqa: E731
+            ch = ""
+            if v0 is not None and v1 is not None:
+                d = v1 - v0
+                if abs(d) <= 1e-3 * max(abs(v0), abs(v1), 1e-12) or (u == "dB" and abs(d) < 0.05):
+                    ch = "same"
+                else:
+                    ch = f"{d:+.3g}" + (f" ({100 * d / abs(v0):+.0f} %)" if abs(v0) > 1e-12 and u != "dB" else " dB"
+                                        if u == "dB" else "")
+            i = self.cmplist.Append([n, fmtv(v0), fmtv(v1), ch])
+            if v0 is not None and v1 is not None and better:
+                rel = (v1 - v0) / max(abs(v0), 1e-12) if u != "dB" else (v1 - v0) / 50
+                if abs(rel) > 0.02:
+                    self.cmplist.SetItemTextColour(i, good if rel * better > 0 else bad)
+        self._fit_columns(self.cmplist, 0)
+        ax1 = self.cmpfig.add_subplot(121)
+        for k, zb in enumerate(b["z"]):
+            ax1.loglog(zb["f"], zb["z"], color=f"C{k}", ls="--", lw=1, label=f"baseline: {zb['title']}")
+        if r:
+            sr = M.Setup.from_dict(r.setup)
+            for k, c in enumerate(r.commutations):
+                ax1.loglog(r.freqs, np.abs(c["Z_ring"]), color=f"C{k}", lw=1.2, label=f"now: {self._comm_short(sr, c)}")
+        ax1.set_xlabel("frequency [Hz]")
+        ax1.set_ylabel("|Z| across the switch [Ω]")
+        ax1.set_title("Ringing impedance (dashed: baseline)", fontsize=9)
+        ax1.grid(alpha=0.3, which="both")
+        ax1.legend(fontsize=7)
+        ax2 = self.cmpfig.add_subplot(122)
+        for k, w in enumerate(b["waves"]):
+            ax2.plot(w["t"], w["v"], color=f"C{k}", ls="--", lw=1, label=f"baseline: {w['title']}")
+        if r:
+            for k, e in enumerate(r.edges):
+                ax2.plot(e.t * 1e9, e.v_sw, color=f"C{k}", lw=1.2, label=f"now: {e.switch} turns {e.kind}")
+        if b["waves"] or (r and r.edges):
+            ax2.set_xlim(0, max([w["t"][-1] for w in b["waves"]] + [0]) * 0.5 or None)
+        ax2.set_xlabel("time [ns]")
+        ax2.set_ylabel("V across the blocking switch [V]")
+        ax2.set_title("Switching edges (dashed: baseline)", fontsize=9)
+        ax2.grid(alpha=0.3)
+        ax2.legend(fontsize=7)
+        self.cmpcanvas.draw()
+
+    def _reload_and_run(self):
+        if self._running:
+            return
+        try:
+            if self.session.kicad is not None:
+                self.session.kicad.save()
+            self.session.load_board(self.session.board_path)      # every window sees the new board
+        except Exception as e:      # noqa: BLE001
+            return wx.MessageBox(f"Could not reload the board: {e}", "Switching Loop", parent=self)
+        self.board = self.session.board
+        self._to_ui()
+        self._run()
 
     def _save_spice(self):
         if not self.res:

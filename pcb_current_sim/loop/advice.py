@@ -138,5 +138,46 @@ def _transient(r, s):
     t = r.tran
     out.append(f"  Switching loss ≈ {t['P_sw_W']:.3g} W at {t['f_sw'] / 1e3:g} kHz (E_on {t['E_on_uJ']:.3g} µJ, "
                f"E_off {t['E_off_uJ']:.3g} µJ).")
+    for sn in s.snubbers_on():
+        out.append(f"  Snubber across the {sn.pos} switch ({sn.r:.3g} Ω, {sn.c * 1e12:.0f} pF): it dissipates "
+                   f"≈ {sn.c * s.v_rail ** 2 * s.f_sw:.3g} W (C V² f_sw).")
+    out.append("")
+    out += _emi(r, s)
+    return out
+
+
+def _emi(r, s):
+    """Lines about the EMI estimate."""
+    x = getattr(r, "emi", None)
+    if not x:
+        return []
+    from .model import EMI_LIMITS
+    name = EMI_LIMITS.get(x["limit"], x["limit"])
+    out = [f"EMI estimate (an indicator, not a test; {name}):"]
+    m, f = x.get("rad_margin", math.nan), x.get("rad_at", math.nan)
+    if math.isfinite(m):
+        rings = [c["f_ring"] for c in r.commutations if math.isfinite(c["f_ring"])]
+        near = any(abs(f / fr - 1) < 0.25 for fr in rings)
+        if m < 0:
+            line = (f"  ✖ Radiated from the hot loop ({x['area_mm2']:.0f} mm² effective area): {-m:.0f} dB over the "
+                    f"limit at {f / 1e6:.0f} MHz")
+            line += (": that is the ring. A snubber (Snubber tab) or a lower-Q loop damps it; a smaller loop area "
+                     "(return copper right under the loop, caps next to the switches) lowers it everywhere."
+                     if near else ": slower edges (gate resistor) and a smaller loop area lower it.")
+        elif m < 6:
+            line = (f"  ⚠ Radiated from the hot loop: {m:.0f} dB under the limit at {f / 1e6:.0f} MHz (little margin; "
+                    "cables usually radiate more than the board).")
+        else:
+            line = f"  Radiated from the hot loop: {m:.0f} dB under the limit (worst at {f / 1e6:.0f} MHz)."
+        out.append(line)
+    if x.get("cond_db") is not None:
+        m, f = x.get("cond_margin", math.nan), x.get("cond_at", math.nan)
+        if math.isfinite(m):
+            what = f"{-m:.0f} dB over" if m < 0 else f"{m:.0f} dB under"
+            out.append(f"  {'✖ ' if m < 0 else ''}Conducted common mode through {s.c_cm * 1e12:g} pF to the chassis: "
+                       f"{what} the quasi-peak limit at {f / 1e6:.2g} MHz (before any input filter or Y-caps).")
+    else:
+        out.append("  Conducted: give the switch node's capacitance to the chassis (EMI tab) for a "
+                   "common-mode estimate.")
     out.append("")
     return out

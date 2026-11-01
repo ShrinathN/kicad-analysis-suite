@@ -4,7 +4,12 @@ import subprocess
 import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, here)
+# the package sits next to this file in a copied install; with `install.sh --link` Python resolves the
+# symlinks, so this file is the repository's kicad_plugin/ and the package is one level up
+for d in (here, os.path.dirname(here)):
+    if os.path.isdir(os.path.join(d, "pcb_current_sim")):
+        sys.path.insert(0, d)
+        break
 
 try:
     import scipy, matplotlib, kipy  # noqa: E401, F401

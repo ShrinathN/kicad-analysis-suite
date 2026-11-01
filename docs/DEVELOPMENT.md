@@ -41,8 +41,9 @@ VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.s
 python3 -m pytest tests
 ```
 
-About 115 tests in about 15 s:
-- `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results.
+About 127 tests in about 75 s:
+- `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results; regulators (LDO, dropout, switching, junction estimate), heat at parts, row values with SI prefixes.
+- `tests/test_loop.py`: Switching Loop: PEEC against analytic inductances, detection (buck, boost ICs, rail links, Kelvin sources, gate chains, 4-switch buck-boost), topologies and the operating point from the converter, transients against analytic RLC and ngspice, snubber, EMI spectrum, losses.
 - `tests/test_suite.py`: stackup parsing and the εr(f) model, scenario migration, the session, the component library and external tool detection.
 - `tests/test_linsolve.py`: the solver backends, copper coverage as a union, the setup cache and the thermal cell.
 - `tests/test_extract.py`: the cross-section solver against Hammerstad–Jensen and Wheeler, path tracing (vias, stubs, coplanar, missing return), pours (C, L and R against analytic values and the DC solver), elements across nets and to REF, R calibration, SPICE output, and runs of the subcircuit and a diode element in ngspice (skipped without ngspice).
@@ -61,7 +62,7 @@ These open real windows, so run them inside the Flatpak with the plugin venv, an
 | `sim/demo/smoke_loop.py [BOARD]` | Switching Loop: detection, one analysis, every tab (default board: the synthetic buck cell `sim/demo/buck_demo.kicad_pcb`, made by `tests/test_loop.py:buck_cell`) | `sim/demo/smoke_out/` |
 | `sim/demo/smoke_matching.py` | Builds a network in the matching editor, edits properties, runs every analysis | `sim/demo/smoke_out/` |
 | `sim/demo/screenshots.py` | Regenerates the documentation screenshots | `docs/screenshots/` |
-| `sim/demo/screenshots_extract.py BOARD` | Trace R/L/C screenshots from a board's saved `extract` setup (the docs use the goodtorch boost converter, which is not in the repository) | `docs/screenshots/extract_*.png` |
+| `sim/demo/screenshots_extract.py BOARD` | Trace R/L/C screenshots from a board's saved `extract` setup (the board used for the docs is not in the repository) | `docs/screenshots/extract_*.png` |
 
 ```sh
 flatpak run --command=sh org.kicad.KiCad -c "$VENV sim/demo/screenshots.py"

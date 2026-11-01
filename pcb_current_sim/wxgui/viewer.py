@@ -20,87 +20,138 @@ from matplotlib.figure import Figure  # noqa: E402
 
 from .. import export  # noqa: E402
 from ..tables import TABLES, fmt, readout, sort_key  # noqa: E402
+from .layout import AutoList  # noqa: E402
 
 REF_HINT = "ΔV reference: global ground (each net's sink).\nClick the map to set a reference point."
 
 
+SIDEBAR_W = 460         # px, the tables / export sidebar's starting width
+READOUT_PT = 12.5       # pt, the values box on the map
+
+
 class ViewerFrame(wx.Frame):
+    """Left: export buttons, then the summary and every table as tabs.  Middle: the map (2D, or the
+    3D view) as large as the window allows, its controls in one bar above it, and the values under
+    the pointer in a box on the map that follows it."""
+
     def __init__(self, parent, res):
-        super().__init__(parent, title=f"Current density - {os.path.basename(res.board_path)}", size=(1300, 880))
+        super().__init__(parent, title=f"Current density - {os.path.basename(res.board_path)}", size=(1500, 950))
         self.res = res
         layers = [L for L in res.layers if export._layer_has_current(res, L)] or res.layers
         self.layer = layers[0]
         self.qkeys = res.quantity_keys()
         self.ref, self.marker, self.hl = None, None, None
+        self.ov, self.bg = None, None
+        self.CreateStatusBar()
+        self.SetStatusText(REF_HINT.replace("\n", " "))
 
         split = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
+        side = wx.Panel(split)
         self.views = wx.Notebook(split)
         top = self.top = wx.Panel(self.views)
-        bottom = wx.Notebook(split)
 
-        # plot + toolbar + export row
-        self.fig = Figure(figsize=(9, 5.5), constrained_layout=True)
+        # ---- sidebar: exports, then the summary and the tables
+        ss = wx.BoxSizer(wx.VERTICAL)
+        ebox = wx.StaticBoxSizer(wx.VERTICAL, side, "Export")
+        erow = wx.WrapSizer()
+        tips = {"View…": "The map as shown (PNG, SVG or PDF)", "All layers…": "Every layer and quantity as images",
+                "Report PDF…": "Summary, tables and maps in one PDF", "CSV…": "Every table as CSV files",
+                "HTML…": "An interactive map in a web page", "ParaView…": "VTK files for ParaView",
+                "Save .npz…": "The whole result, to open again later from the Results browser"}
+        for text, cmd in (("View…", self._export_view), ("All layers…", self._export_all),
+                          ("Report PDF…", self._export_pdf), ("CSV…", self._export_csv),
+                          ("HTML…", self._export_html), ("ParaView…", self._export_vtk),
+                          ("Save .npz…", self._save)):
+            b = wx.Button(ebox.GetStaticBox(), label=text, style=wx.BU_EXACTFIT)
+            b.SetToolTip(tips[text])
+            b.Bind(wx.EVT_BUTTON, lambda e, c=cmd: c())
+            erow.Add(b, 0, wx.ALL, 2)
+        ebox.Add(erow, 0, wx.EXPAND)
+        ss.Add(ebox, 0, wx.EXPAND | wx.ALL, 4)
+        # every table's name in a list (a row of tabs would not fit a sidebar), the chosen one below
+        self.pick = wx.ListBox(side, style=wx.LB_SINGLE)
+        self.pick.SetToolTip("The summary and the result tables: pick one to show it below")
+        tabs = self.tabs = wx.Simplebook(side)
+        txt = wx.TextCtrl(tabs, value=res.summary_text(), style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
+        txt.SetFont(wx.Font(9, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
+        txt.ShowPosition(0)
+        tabs.AddPage(txt, "Summary")
+        self.pick.Append("Summary")
+        for title, attr, cols in TABLES:
+            rows = getattr(res, attr)
+            if not rows and attr not in ("rows", "pads"):
+                continue                    # empty tables (no vias, no pulse...) only take room
+            lc = AutoList(tabs, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+            for k, c in enumerate(cols):
+                lc.InsertColumn(k, c, width=max(80, 9 * len(c)))
+            lc.rows, lc.cols, lc.rev = rows, cols, False
+            self._fill(lc, list(range(len(rows))))
+            lc.Bind(wx.EVT_LIST_COL_CLICK, lambda e, lc=lc: self._sort(lc, e.GetColumn()))
+            lc.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda e, lc=lc: self._goto(lc.rows[lc.GetItemData(e.GetIndex())]))
+            lc.SetToolTip("Click a row to mark it on the map; click a column header to sort")
+            tabs.AddPage(lc, f"{title} ({len(rows)})")
+            self.pick.Append(f"{title} ({len(rows)})")
+        self.pick.SetSelection(0)
+        self.pick.Bind(wx.EVT_LISTBOX, lambda e: self.tabs.SetSelection(self.pick.GetSelection()))
+        h = self.pick.GetCharHeight() + 9
+        self.pick.SetMinSize((-1, h * self.pick.GetCount() + 6))
+        ss.Add(self.pick, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 4)
+        ss.Add(tabs, 1, wx.EXPAND | wx.ALL, 4)
+        side.SetSizer(ss)
+
+        # ---- middle: one bar of map controls, the map, its toolbar
+        bar = wx.WrapSizer(wx.HORIZONTAL, 0)      # 0: the last item keeps its own width
+
+        def lab(t):
+            bar.Add(wx.StaticText(top, label=t), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 4)
+        lab("Layer")
+        self.lch = wx.Choice(top, choices=res.layers)
+        self.lch.SetStringSelection(self.layer)
+        self.lch.Bind(wx.EVT_CHOICE, lambda e: self._set_layer(self.lch.GetStringSelection()))
+        self.lch.SetToolTip("Copper layer shown in the map")
+        bar.Add(self.lch, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        lab("Show")
+        self.qbox = wx.Choice(top, choices=[res.QUANTITIES[k] for k in self.qkeys])
+        self.qbox.SetSelection(0)
+        self.qbox.Bind(wx.EVT_CHOICE, lambda e: self.redraw())
+        self.qbox.SetToolTip("The quantity drawn on the map")
+        bar.Add(self.qbox, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        self.log = wx.CheckBox(top, label="Log scale")
+        self.log.SetValue(True)
+        self.stream = wx.CheckBox(top, label="Streamlines")
+        self.labels = wx.CheckBox(top, label="Pad labels")
+        self.labels.SetValue(True)
+        self.follow = wx.CheckBox(top, label="Values at the pointer")
+        self.follow.SetValue(True)
+        self.log.SetToolTip("Logarithmic colour scale for current density and power (shows the weak spreading "
+                            "as well as the hot spots)")
+        self.stream.SetToolTip("Draw lines along the current flow")
+        self.labels.SetToolTip("Label the pads with their part and pad number")
+        self.follow.SetToolTip("Show |J|, V, ΔV, power density, T and B under the mouse pointer in a box on the map "
+                               "(unticked: in the top-left corner of the map)")
+        for c in (self.log, self.stream, self.labels):
+            c.Bind(wx.EVT_CHECKBOX, lambda e: self.redraw())
+            bar.Add(c, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        bar.Add(self.follow, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        b = wx.Button(top, label="Clear ΔV reference", style=wx.BU_EXACTFIT)
+        b.SetToolTip("Forget the reference point: ΔV is no longer shown (click the map to set a new one)")
+        b.Bind(wx.EVT_BUTTON, lambda e: self._clear_ref())
+        bar.Add(b, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        self.fig = Figure(figsize=(9, 6.5), constrained_layout=True)
         self.canvas = FigureCanvasWxAgg(top, -1, self.fig)
         self.toolbar = NavigationToolbar2WxAgg(self.canvas)
         self.toolbar.Realize()
         self.canvas.mpl_connect("motion_notify_event", self._motion)
         self.canvas.mpl_connect("button_press_event", self._click)
-        erow = wx.BoxSizer(wx.HORIZONTAL)
-        erow.Add(wx.StaticText(top, label="Export:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 6)
-        for text, cmd in (("View…", self._export_view), ("All layers…", self._export_all),
-                          ("Report PDF…", self._export_pdf), ("CSV…", self._export_csv),
-                          ("HTML…", self._export_html), ("ParaView…", self._export_vtk),
-                          ("Save .npz…", self._save)):
-            b = wx.Button(top, label=text)
-            b.Bind(wx.EVT_BUTTON, lambda e, c=cmd: c())
-            erow.Add(b, 0, wx.RIGHT, 2)
+        self.canvas.mpl_connect("draw_event", self._drawn)
+        self.canvas.mpl_connect("axes_leave_event", lambda e: self._show_values(None))
+        self.canvas.SetToolTip("Click to set the ΔV reference point; zoom and pan with the toolbar below")
         plot = wx.BoxSizer(wx.VERTICAL)
+        plot.Add(bar, 0, wx.EXPAND | wx.ALL, 4)
         plot.Add(self.canvas, 1, wx.EXPAND)
         plot.Add(self.toolbar, 0, wx.EXPAND)
-        plot.Add(erow, 0, wx.TOP | wx.BOTTOM, 2)
-
-        # controls
-        ctl = wx.BoxSizer(wx.VERTICAL)
-        ctl.Add(wx.StaticText(top, label="Layer"))
-        self.lch = wx.Choice(top, choices=res.layers)
-        self.lch.SetStringSelection(self.layer)
-        self.lch.Bind(wx.EVT_CHOICE, lambda e: self._set_layer(self.lch.GetStringSelection()))
-        self.lch.SetToolTip("Copper layer shown in the map")
-        ctl.Add(self.lch, 0, wx.EXPAND | wx.BOTTOM, 8)
-        self.qbox = wx.RadioBox(top, label="Quantity", choices=[res.QUANTITIES[k] for k in self.qkeys],
-                                majorDimension=1, style=wx.RA_SPECIFY_COLS)
-        self.qbox.Bind(wx.EVT_RADIOBOX, lambda e: self.redraw())
-        self.qbox.SetToolTip("The quantity drawn on the map")
-        ctl.Add(self.qbox, 0, wx.EXPAND | wx.BOTTOM, 8)
-        self.log = wx.CheckBox(top, label="Log scale (|J|, power)")
-        self.log.SetValue(True)
-        self.stream = wx.CheckBox(top, label="Current streamlines")
-        self.labels = wx.CheckBox(top, label="Pad labels")
-        self.labels.SetValue(True)
-        self.log.SetToolTip("Logarithmic colour scale for current density and power (shows the weak spreading "
-                            "as well as the hot spots)")
-        self.stream.SetToolTip("Draw lines along the current flow")
-        self.labels.SetToolTip("Label the pads with their part and pad number")
-        for c in (self.log, self.stream, self.labels):
-            c.Bind(wx.EVT_CHECKBOX, lambda e: self.redraw())
-            ctl.Add(c, 0, wx.BOTTOM, 2)
-        ctl.Add(wx.StaticText(top, label="Cursor"), 0, wx.TOP, 10)
-        self.readout = wx.TextCtrl(top, value="move over the map", size=(300, 175),
-                                   style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
-        self.readout.SetToolTip("Values under the mouse pointer; click the map to set a voltage reference point")
-        self.readout.SetFont(wx.Font(9, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        ctl.Add(self.readout, 0, wx.EXPAND)
-        self.refl = wx.StaticText(top, label=REF_HINT)
-        self.refl.Wrap(290)
-        ctl.Add(self.refl, 0, wx.TOP, 4)
-        b = wx.Button(top, label="Clear reference")
-        b.Bind(wx.EVT_BUTTON, lambda e: self._clear_ref())
-        ctl.Add(b, 0, wx.TOP, 4)
-
-        row = wx.BoxSizer(wx.HORIZONTAL)
-        row.Add(plot, 1, wx.EXPAND)
-        row.Add(ctl, 0, wx.EXPAND | wx.ALL, 8)
-        top.SetSizer(row)
+        top.SetSizer(plot)
         self.views.AddPage(top, "2D map")
         self.page3d, self.web, self.html3d = None, None, None
         if res.summary.get("layer_z_mm"):
@@ -108,25 +159,9 @@ class ViewerFrame(wx.Frame):
             self.views.AddPage(self.page3d, "3D")
             self.views.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._page)
 
-        # tables
-        txt = wx.TextCtrl(bottom, value=res.summary_text(), style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
-        txt.SetFont(wx.Font(9, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        txt.ShowPosition(0)
-        bottom.AddPage(txt, "Summary")
-        for title, attr, cols in TABLES:
-            rows = getattr(res, attr)
-            lc = wx.ListCtrl(bottom, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-            for k, c in enumerate(cols):
-                lc.InsertColumn(k, c, width=max(80, 9 * len(c)))
-            lc.rows, lc.cols, lc.rev = rows, cols, False
-            self._fill(lc, list(range(len(rows))))
-            lc.Bind(wx.EVT_LIST_COL_CLICK, lambda e, lc=lc: self._sort(lc, e.GetColumn()))
-            lc.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda e, lc=lc: self._goto(lc.rows[lc.GetItemData(e.GetIndex())]))
-            bottom.AddPage(lc, f"{title} ({len(rows)})")
-
-        split.SplitHorizontally(self.views, bottom, 600)
-        split.SetMinimumPaneSize(120)
-        split.SetSashGravity(0.7)
+        split.SplitVertically(side, self.views, SIDEBAR_W)
+        split.SetMinimumPaneSize(200)
+        split.SetSashGravity(0.0)            # the map takes what the window gains
         self.redraw()
 
     # ------------------------------------------------------------ tables
@@ -188,12 +223,48 @@ class ViewerFrame(wx.Frame):
         self.marker = self.hl = None
         if self.ref and self.ref[0] == self.layer:
             self.marker = self.ax.plot(self.ref[1], self.ref[2], "c+", ms=14, mew=2)[0]
+        # the values box: animated, so it is blitted over the saved map instead of redrawing it
+        self.ov = self.ax.annotate("", xy=(0, 0), xytext=(18, 18), textcoords="offset points",
+                                   fontsize=READOUT_PT, family="monospace", color="white", zorder=20,
+                                   multialignment="left",
+                                   bbox=dict(boxstyle="round,pad=0.45", fc=(0.05, 0.05, 0.08, 0.90), ec="0.75"),
+                                   animated=True, annotation_clip=False, visible=False)
+        self.bg = None
         self.canvas.draw_idle()
 
+    def _drawn(self, e):
+        """After every full draw: keep the map as the background the values box is blitted over."""
+        self.bg = self.canvas.copy_from_bbox(self.fig.bbox)
+
+    def _show_values(self, e):
+        if self.ov is None or self.bg is None or str(self.toolbar.mode):
+            return                          # nothing drawn yet, or panning / zooming (the map is moving)
+        if e is None or e.inaxes is not self.ax or e.xdata is None:
+            self.ov.set_visible(False)
+        else:
+            self.ov.set_text(readout(self.res, self.layer, e.xdata, e.ydata, self.ref))
+            self.ov.set_visible(True)
+            if self.follow.GetValue():
+                bb = self.ax.bbox          # keep the box inside the map: flip it at the right / top half
+                right = e.x > bb.x0 + 0.55 * bb.width
+                upper = e.y > bb.y0 + 0.5 * bb.height
+                self.ov.xy = (e.xdata, e.ydata)
+                self.ov.xycoords = "data"
+                self.ov.set_position((-18 if right else 18, -18 if upper else 18))
+                self.ov.set_ha("right" if right else "left")
+                self.ov.set_va("top" if upper else "bottom")
+            else:
+                self.ov.xy, self.ov.xycoords = (0.01, 0.99), "axes fraction"
+                self.ov.set_position((4, -4))
+                self.ov.set_ha("left")
+                self.ov.set_va("top")
+        self.canvas.restore_region(self.bg)
+        if self.ov.get_visible():
+            self.ax.draw_artist(self.ov)
+        self.canvas.blit(self.fig.bbox)
+
     def _motion(self, e):
-        if e.inaxes is not self.ax or e.xdata is None:
-            return
-        self.readout.ChangeValue(readout(self.res, self.layer, e.xdata, e.ydata, self.ref))
+        self._show_values(e)
 
     def _click(self, e):
         if e.inaxes is not self.ax or e.button != 1 or str(self.toolbar.mode):
@@ -202,10 +273,8 @@ class ViewerFrame(wx.Frame):
         if s.get("V") is None or not math.isfinite(s["V"]):
             return
         self.ref = (self.layer, e.xdata, e.ydata, s["V"])
-        self.refl.SetLabel(f"ΔV reference: ({e.xdata:.2f}, {e.ydata:.2f}) on {self.layer}, "
-                           f"V = {s['V']:.3f} mV, net {s.get('net')}")
-        self.refl.Wrap(290)
-        self.top.Layout()
+        self.SetStatusText(f"ΔV reference: ({e.xdata:.2f}, {e.ydata:.2f}) mm on {self.layer}, "
+                           f"V = {s['V']:.3f} mV, net {s.get('net')}. The box on the map shows ΔV against it.")
         if self.marker is not None:
             self.marker.remove()
         self.marker = self.ax.plot(e.xdata, e.ydata, "c+", ms=14, mew=2)[0]
@@ -213,9 +282,7 @@ class ViewerFrame(wx.Frame):
 
     def _clear_ref(self):
         self.ref = None
-        self.refl.SetLabel(REF_HINT)
-        self.refl.Wrap(290)
-        self.top.Layout()
+        self.SetStatusText(REF_HINT.replace("\n", " "))
         self.redraw()
 
     # ------------------------------------------------------------ 3D

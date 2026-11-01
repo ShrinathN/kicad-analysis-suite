@@ -7,7 +7,8 @@ may carry a fix: an action key the GUI turns into a button:
     "edit:<key>"        open a part's model
     "off:<k1>,<k2>"     switch those parts off
     "drive:<key>"       add a gate drive for that FET
-    "opt:<field>"       go to an option field
+    "opt:<field>"       go to an option field (also "opt:topology")
+    "cell:<net>"        add a cell for that switch node
 """
 import math
 import os
@@ -72,8 +73,9 @@ def errors(s):
     return out
 
 
-def check(board, s):
-    """All issues of cell s on this board, worst first."""
+def check(board, s, cells=()):
+    """All issues of cell s on this board, worst first.  cells: the switch nets of the board's other
+    cells (a 4-switch buck-boost's second leg is then not asked for)."""
     if not s.sw_net:
         return [Issue("error", "No switch node: pick it and press Detect parts.", "detect", "Detect parts")]
     out = []
@@ -135,15 +137,34 @@ def check(board, s):
     if not s.i_switch:
         out.append(Issue("info", "Give the inductor current (Operating point) for the switching simulation and "
                                  "the overshoot in volts.", "opt:i_switch", "Set current"))
+    topo = s.topology
+    if topo in M.TOPO_CTRL and s.by_role("upper") and s.by_role("lower"):
+        pos = M.TOPO_CTRL[topo]
+        if not any(x.kind == "fet" for x in s.by_role(pos)):
+            has = "a diode" if any(x.kind == "diode" for x in s.by_role(pos)) else "no switch"
+            out.append(Issue("error" if s.transient and s.i_switch else "warn",
+                             f"A {M.TOPO_NAME[topo]} switches its {pos} position, but there is {has} there. "
+                             f"Check the topology (a diode in the {pos} position is the rectifier of a "
+                             f"{'boost' if pos == 'upper' else 'buck'}).", "opt:topology", "Topology"))
+    leg = s.other_leg(board)
+    if leg and leg not in cells:
+        out.append(Issue("info", f"The inductor's other end, {leg}, is a switch node too: a 4-switch buck-boost "
+                                 "(or a full bridge). Each leg is its own cell; add one for it to analyse that "
+                                 "leg's hot loop.", f"cell:{leg}", f"Add a cell for {leg}"))
+    if topo in ("bb_in", "bb_out") and s.duty in (0.0, 1.0) and s.transient:
+        out.append(Issue("info", "At duty 0 or 1 this leg does not switch (the other leg does): turn off the "
+                                 "switching simulation for it.", "opt:transient", "Switching simulation"))
     if s.transient and s.sw_net and s.by_role("upper") and s.by_role("lower"):
         d, why = s.current_dir(board)
         if why.startswith("guessed"):
             out.append(Issue("warn", f"The inductor current's direction is a guess ({'out of' if d == 'out' else 'into'} "
-                                     "the switch node, as in a buck). It decides which switch is hard-switched: set "
-                                     "it under Operating point.", "opt:i_dir", "Set direction"))
+                                     "the switch node, as in a buck). It decides which switch is hard-switched: pick "
+                                     "the topology.", "opt:topology", "Topology"))
         pos = "upper" if d == "out" else "lower"
         ctrl = next((x for x in s.by_role(pos) if x.kind == "fet"), None)
-        if ctrl is None:
+        if ctrl is None and topo in M.TOPO_CTRL:
+            pass                        # said above, against the topology
+        elif ctrl is None:
             out.append(Issue("error" if s.i_switch else "warn",
                              f"No switch in the {pos} position to simulate (inductor current "
                              f"{'out of' if d == 'out' else 'into'} the switch node): check the direction.",
