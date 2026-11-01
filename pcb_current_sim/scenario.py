@@ -8,13 +8,14 @@ Version-1 files (rows / elements / settings at the top level) load as the "dc" s
 Copper-thickness overrides belong to the shared stackup ("stackup.cu_thickness");
 the DC tool's Settings.thickness is filled from there on load and written back on save.
 
-Only user-defined elements and edited auto elements need saving; the rest
-are re-detected from the board on load (see elements.merge)."""
+Elements between pads are the board's shared component list (section "components", see
+components.py): DC & Thermal reads and writes its view of it here.  Only user-defined elements and
+detected ones with changed switches are saved; the rest are re-detected from the board on load
+(see elements.merge)."""
 import json
 import os
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 
-from .elements import Element
 from .solver import Row, Settings
 
 VERSION = 2
@@ -55,13 +56,19 @@ def save_section(path, name, data, **more):
     os.replace(tmp, path)
 
 
-def save_scenario(path, rows, settings, elements=()):
-    st = section(path, "stackup")
+def save_scenario(path, rows, settings, elements=None):
+    """Save the DC section; `elements` (DC's element list, or its elements.to_save part) goes into the
+    shared component list.  None leaves the component list as it is."""
+    from . import components as CO
+    d = read(path)
+    st = d.get("stackup") or {}
     st["cu_thickness"] = dict(settings.thickness)
     s = asdict(settings)
     s.pop("thickness")
-    save_section(path, "dc", dict(rows=[asdict(r) for r in rows], elements=[asdict(e) for e in elements],
-                                  settings=s), stackup=st)
+    more = dict(stackup=st)
+    if elements is not None:
+        more[CO.SECTION] = CO.Components(CO.migrate(d)).sync("dc", elements).section()
+    save_section(path, "dc", dict(rows=[asdict(r) for r in rows], settings=s), **more)
 
 
 def load_scenario(path):
@@ -71,6 +78,6 @@ def load_scenario(path):
     known = {f.name for f in fields(Settings)}
     s = Settings(**{k: v for k, v in dc.get("settings", {}).items() if k in known})
     s.thickness = dict((d.get("stackup") or {}).get("cu_thickness") or s.thickness)
-    ek = {f.name for f in fields(Element)}
-    els = [Element(**{k: v for k, v in e.items() if k in ek}) for e in dc.get("elements", [])]
+    from . import components as CO
+    els = [replace(e, enabled=CO.used(e, "dc")) for e in CO.migrate(d)]
     return rows, s, els

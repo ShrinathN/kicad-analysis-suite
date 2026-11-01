@@ -579,6 +579,9 @@ class MainFrame(wx.Frame):
         elif what == "stackup":
             self.settings.thickness = dict(self.session.stackup.cu_override)
             self._refresh_layers()
+        elif what == "components" and self.session.sharing != "dc" and self.board is not None:
+            self.elements = self.session.components.view("dc")
+            self._refresh_elements()
 
     # ------------------------------------------------------------- layout
     def _build(self):
@@ -628,8 +631,8 @@ class MainFrame(wx.Frame):
         top.Add(box, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
         # resistance elements
-        ebox = wx.StaticBoxSizer(wx.VERTICAL, p, "Resistance elements (resistors found on the board, plus "
-                                                   "any two pads you add)")
+        ebox = wx.StaticBoxSizer(wx.VERTICAL, p, "Elements between pads: the board's shared component list "
+                                                   "(resistors found on the board, plus parts you add)")
         eb = ebox.GetStaticBox()
         frow = wx.BoxSizer(wx.HORIZONTAL)
         self.efind = wx.SearchCtrl(eb, size=(260, -1))
@@ -645,13 +648,15 @@ class MainFrame(wx.Frame):
         frow.Add(self.ecount, 0, wx.ALIGN_CENTER_VERTICAL)
         ebox.Add(frow, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
         self.ecols = ["On", "In circuit", "Name", "Pad A", "Pad B", "Value", "Rating [W]", "Nets", "Heats board",
-                      "Source"]
+                      "Source", "Also used by"]
         self.etree = _list(eb, [(c, 80) for c in self.ecols])
         self._erows, self._esort = [], (2, False)          # displayed element indices; sort column, reversed
         self.etree.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._el_edit())
         self.etree.Bind(wx.EVT_LIST_COL_CLICK, lambda e: self._el_sort(e.GetColumn()))
         self.etree.SetToolTip("Resistances, diodes and regulators between pads: resistor footprints found on "
-                              "the board and elements you add. Click a column title to sort by it (again: "
+                              "the board and elements you add. The list is shared with the other tools (Trace "
+                              "R/L/C, ...): an edit here changes the part there too, while On / off is per tool. "
+                              "Click a column title to sort by it (again: "
                               "reverse); Shift / Ctrl-click to select several; double-click to edit")
         ebox.Add(self.etree, 1, wx.EXPAND | wx.ALL, 4)
         ecol = wx.BoxSizer(wx.HORIZONTAL)
@@ -840,15 +845,13 @@ class MainFrame(wx.Frame):
         sp = scenario_path(path)
         if load_table and os.path.exists(sp):
             try:
-                self.rows, self.settings, self.saved_elements = load_scenario(sp)
+                self.rows, self.settings, _ = load_scenario(sp)
                 self._settings_to_ui()
             except Exception as e:  # noqa: BLE001
                 self._status(f"Could not load saved table: {e}")
-        else:
-            self.saved_elements = EL.to_save(self.elements)
         self.settings.thickness = dict(self.session.stackup.cu_override)
-        auto, self.el_warnings = EL.detect(b)
-        self.elements = EL.merge(auto, self.saved_elements)
+        self.elements = self.session.components.view("dc")        # the board's shared component list
+        self.el_warnings = list(self.session.components.warnings)
         if self.el_warnings:
             self._status(self.el_warnings[0] + (f" (+{len(self.el_warnings) - 1} more)"
                                                 if len(self.el_warnings) > 1 else ""))
@@ -921,7 +924,8 @@ class MainFrame(wx.Frame):
                   "yes" if id(e) in used else "", e.name, e.a, e.b + (f", GND {e.g}" if e.regulator else ""),
                   e.describe(), f"{e.P_rated:g}" if e.P_rated else "",
                   " – ".join(nets.get(p, "?") for p in e.pads()),
-                  "yes" if e.heats else "no (external)", "auto" if e.auto else "user"] for e in self.elements]
+                  "yes" if e.heats else "no (external)", "auto" if e.auto else "user",
+                  ", ".join(self.session.components.users(e, but="dc"))] for e in self.elements]
         words = [w for w in re.split(r"[\s,;]+", self.efind.GetValue().strip().lower()) if w]
         order = [k for k, t in enumerate(texts)
                  if not words or any(w in " ".join(t[2:8]).lower() for w in words)]
@@ -951,7 +955,7 @@ class MainFrame(wx.Frame):
         with ElementDialog(self, self.board, preset or EL.Element("", "", "", 0.0)) as d:
             if d.ShowModal() == wx.ID_OK and d.result:
                 self.elements = [e for e in self.elements if e.name != d.result.name] + [d.result]
-                self._refresh_elements()
+                self._el_changed()
 
     def _reg_add(self):
         if not self.board:
@@ -959,7 +963,7 @@ class MainFrame(wx.Frame):
         with RegulatorDialog(self, self.board, EL.Element("", "", "", 0.0, model="LDO")) as d:
             if d.ShowModal() == wx.ID_OK and d.result:
                 self.elements = [e for e in self.elements if e.name != d.result.name] + [d.result]
-                self._refresh_elements()
+                self._el_changed()
 
     def _el_edit(self):
         sel = self._esel()
@@ -967,25 +971,48 @@ class MainFrame(wx.Frame):
             el = self.elements[sel[0]]
             with (RegulatorDialog if el.regulator else ElementDialog)(self, self.board, el) as d:
                 if d.ShowModal() == wx.ID_OK and d.result:
+                    if not self._el_rename_ok(el, d.result):
+                        return
                     self.elements[sel[0]] = d.result
-                    self._refresh_elements()
+                    self._el_changed()
 
     def _el_toggle(self):
         for k in self._esel():
             self.elements[k].enabled = not self.elements[k].enabled
-        self._refresh_elements()
+        self._el_changed()
+
+    def _el_changed(self, refresh=True):
+        """The element list changed here: update the shared component list (saved, other tools told)."""
+        self.session.share("dc", self.elements)
+        if refresh:
+            self._refresh_elements()
+
+    def _el_rename_ok(self, old, new):
+        """Renaming a component other tools use makes it a new part for them (their switches are kept
+        by name): ask first."""
+        others = self.session.components.users(old, but="dc")
+        if old.name == new.name or not others:
+            return True
+        return wx.MessageBox(f"{old.name} is also used by {', '.join(others)}. Renamed, it is a new part "
+                             f"there (switched off). Rename it?", "Elements", wx.YES_NO, self) == wx.YES
 
     def _el_delete(self):
         sel = self._esel()
         if any(self.elements[k].auto for k in sel):
             wx.MessageBox("Resistors found on the board cannot be deleted; they are switched off instead.",
                           "Elements", parent=self)
+        shared = [f"{self.elements[k].name} ({', '.join(self.session.components.users(self.elements[k], 'dc'))})"
+                  for k in sel if not self.elements[k].auto and self.session.components.users(self.elements[k], "dc")]
+        if shared and wx.MessageBox("These parts are also used by other tools and will be deleted there too:\n"
+                                    + "\n".join(shared) + "\n\nTo leave them there, switch them off here "
+                                    "instead (On / off). Delete?", "Elements", wx.YES_NO, self) != wx.YES:
+            return
         for k in sorted(sel, reverse=True):
             if self.elements[k].auto:
                 self.elements[k].enabled = False
             else:
                 del self.elements[k]
-        self._refresh_elements()
+        self._el_changed()
 
     def _add(self, preset=None):
         if not self.board:
@@ -1024,11 +1051,12 @@ class MainFrame(wx.Frame):
         with wx.FileDialog(self, "Load table", wildcard="Scenario (*.json)|*.json",
                            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST) as d:
             if d.ShowModal() == wx.ID_OK:
-                self.rows, self.settings, self.saved_elements = load_scenario(d.GetPath())
+                self.rows, self.settings, saved = load_scenario(d.GetPath())
                 if self.session.stackup is not None:
                     self.session.stackup.cu_override = dict(self.settings.thickness)
                     self.session.set_stackup(self.session.stackup)
-                self.elements = EL.merge(EL.detect(self.board)[0] if self.board else [], self.saved_elements)
+                self.elements = EL.merge(EL.detect(self.board)[0] if self.board else [], saved)
+                self._el_changed(refresh=False)
                 self._settings_to_ui()
                 self._refresh_layers()
                 self._refresh_rows()

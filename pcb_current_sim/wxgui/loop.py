@@ -862,9 +862,12 @@ class LoopFrame(wx.Frame):
             cells = [M.Setup.from_dict(c) for c in d["cells"]]
             for c, x in zip(cells, d["cells"]):
                 c.baseline = x.get("baseline")         # results kept to compare with (Compare tab)
+                SV.apply_components(c, self.session.components)
             return cells, min(max(int(d.get("current", 0)), 0), len(cells) - 1)
         if d.get("setup"):
-            return [M.Setup.from_dict(d["setup"])], 0
+            c = M.Setup.from_dict(d["setup"])
+            SV.apply_components(c, self.session.components)
+            return [c], 0
         try:
             first = M.detect(self.board)
             self._apply_saved(first)
@@ -888,6 +891,7 @@ class LoopFrame(wx.Frame):
 
     def _apply_saved(self, s):
         done = SV.apply(self.board, s, SV.load(self._store()))
+        done += SV.apply_components(s, self.session.components)
         return f" Saved models applied to {', '.join(done)}." if done else ""
 
     def _cell_name(self, c):
@@ -902,7 +906,12 @@ class LoopFrame(wx.Frame):
     def _on_session(self, what):
         if what == "board" and self.session.board is not None:
             self.board = self.session.board
+            for c in self.cells:
+                SV.apply_components(c, self.session.components)
             wx.CallAfter(self._to_ui)
+        elif what == "components" and self.session.sharing != "loop":
+            if any([SV.apply_components(c, self.session.components) for c in self.cells]):
+                wx.CallAfter(self._to_ui)
 
     # ------------------------------------------------------------- UI
     def _box(self, parent, sizer, title, grow=0):
@@ -1611,6 +1620,7 @@ class LoopFrame(wx.Frame):
         if rail == ret:
             return wx.MessageBox("The rail and the return must be different nets.", "Cell", parent=self)
         M.set_cell_nets(self.board, self.setup, rail, ret)
+        SV.apply_components(self.setup, self.session.components)
         self.results.pop(self.ci, None)
         self._to_ui()
         self._show_or_clear()
@@ -1725,7 +1735,23 @@ class LoopFrame(wx.Frame):
         with ModelDialog(self, d, self.session.library, self.board, self._store()) as dlg:
             if dlg.ShowModal() == wx.ID_OK:
                 d.model, d.nets, d.kelvin = dlg.result
+                if d.kind == "cap":
+                    self._share_cap(d)
                 self._to_ui()
+
+    def _share_cap(self, d):
+        """A capacitor's model edited here goes into the board's shared component list (the same part
+        in the other cells, Trace and PDN)."""
+        e = SV.cap_component(self.board, d)
+        old = self.session.components.get(d.ref)
+        if e is None or (old is not None and old.model != "C"):
+            return
+        if old is not None:
+            e.a, e.b = old.a, old.b            # keep the pads the part was entered with
+        self.session.put_component("loop", e)
+        for c in self.cells:                   # the same capacitor in the other cells
+            if c is not self.setup:
+                SV.apply_components(c, self.session.components)
 
     def _toggle(self):
         """On/off for every selected part: all off if they were all on, else all on."""
@@ -1755,6 +1781,7 @@ class LoopFrame(wx.Frame):
             caps = [x for x in self.setup.devices if x.kind == "cap"]
             self.setup.devices = [x for x in self.setup.devices if x.kind != "cap"] + \
                 M.find_caps(self.board, self.setup, old=caps)
+        SV.apply_components(self.setup, self.session.components)
         self._to_ui()
 
     def _remove(self):

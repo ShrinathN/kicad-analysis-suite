@@ -22,6 +22,8 @@ from ..suite.session import Session
 from .layout import AutoList
 
 SHARED = (("stackup", "Stackup & materials…", "Copper, dielectric thickness, εr and tanδ against f"),
+          ("components", "Components…", "This board's parts between pads, shared by the tools, and which tool "
+                                        "uses each"),
           ("library", "Component library…", "Real-part models: L, C, R with tolerance, Q, SRF, ESR, ESL"),
           ("results", "Results browser…", "Saved results of every tool"),
           ("external", "External tools…", "openEMS, FastHenry, FastCap, ParaView; Flatpak sandbox access"))
@@ -66,6 +68,11 @@ def open_window(session, key, parent=None):
         if session.stackup is None:
             return wx.MessageBox("Load a board first.", "Stackup", parent=parent)
         w = StackupFrame(session)
+    elif key == "components":
+        if session.board is None:
+            return wx.MessageBox("Load a board first.", "Components", parent=parent)
+        from .components import ComponentsFrame
+        w = ComponentsFrame(session)
     elif key == "library":
         w = LibraryFrame(session)
     elif key == "results":

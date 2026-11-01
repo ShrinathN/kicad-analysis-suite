@@ -1,11 +1,15 @@
 """State shared by all suite windows in one process: board, stackup, component library, KiCad link.
 
-Windows subscribe with `listen(fn)`; fn(what) is called with "board", "stackup" or "library"
-after a change (on the GUI thread, since only GUI code changes the session).
+Windows subscribe with `listen(fn)`; fn(what) is called with "board", "stackup", "library" or
+"components" after a change (on the GUI thread, since only GUI code changes the session).
+`components` is the board's shared list of parts between pads (components.Components): a tool
+hands its edited view back with `share(tool, elements)`, which saves it and tells the other
+windows (not the one sharing: `self.sharing` names it during the notification).
 """
 import os
 
 from .. import board as B
+from .. import components as CO
 from .. import scenario as SC
 from . import stackup as ST
 from .library import Library
@@ -22,6 +26,8 @@ class Session:
         self.highlight = True            # clicking parts in a tool's list selects them in KiCad
         self.last_result = None          # most recent DC result, for the results browser
         self.windows = {}                # tool key -> open window (owned by the GUI layer)
+        self.components = CO.Components()
+        self.sharing = None              # the tool whose component change is being announced
         self._listeners = []
 
     # ---- events ----------------------------------------------------------
@@ -60,6 +66,7 @@ class Session:
         board = B.load(path)
         self.board_path, self.board = os.path.abspath(path), board
         self.stackup = ST.from_board(board, self._saved_stackup())
+        self.components = CO.Components.load(board, self.scenario_path)
         self.notify("board")
         return board
 
@@ -84,6 +91,40 @@ class Session:
         else:
             self.stackup.cu_override[layer] = t
         self.set_stackup(self.stackup)
+
+    # ---- shared components ------------------------------------------------
+    def share(self, tool, elements, save=True):
+        """A tool's edited component view: merge it into the shared list, save, tell the others."""
+        self.components.sync(tool, elements)
+        if save and self.scenario_path:
+            try:
+                self.components.save(self.scenario_path)
+            except OSError:
+                pass
+        self.sharing = tool
+        try:
+            self.notify("components")
+        finally:
+            self.sharing = None
+
+    def components_changed(self, save=True):
+        """The list was changed outside any tool (the Components window): save it and tell every tool."""
+        if save and self.scenario_path:
+            try:
+                self.components.save(self.scenario_path)
+            except OSError:
+                pass
+        self.sharing = "components"
+        try:
+            self.notify("components")
+        finally:
+            self.sharing = None
+
+    def put_component(self, tool, el, save=True):
+        """One component added or changed by a tool without a view of the list (Switching Loop)."""
+        new = self.components.put(tool, el)
+        self.share(tool, self.components.view(tool), save=save)
+        return new
 
     def library_changed(self):
         self.library.save()

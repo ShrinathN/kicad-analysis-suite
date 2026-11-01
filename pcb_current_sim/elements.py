@@ -20,7 +20,7 @@ Its loss V_in I_in - V_out I_out heats the part's pads (shared by pad area).  DC
 regulation loop, soft start, current limit or thermal shutdown.
 """
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 R_MIN = 1e-6           # ohm; 0 ohm parts are modelled as this (ideal link)
 REGULATORS = ("LDO", "SMPS")
@@ -57,6 +57,12 @@ class Element:
     eta: float = 0.9         # SMPS efficiency (P_out / P_in)
     psi_jb: float = 0.0      # °C/W, junction to board (datasheet Ψ_JB); 0 = no junction estimate
     Tj_max: float = 125.0    # °C, for the warning
+    # which tools use it ({"dc": True, "extract": False, ...}): the element is defined once for the
+    # board (components.Components) and each tool switches it on or off for itself
+    use: dict = field(default_factory=dict)
+    # real model of a C / L (suite.library.Part as a dict: ESR, ESL, tolerance, DC bias ...), set by the
+    # tools that need it (Switching Loop, PDN); DC & Thermal and Trace use the ideal value C / L / R
+    part: dict = field(default_factory=dict)
 
     @property
     def regulator(self):

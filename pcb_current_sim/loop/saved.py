@@ -70,3 +70,33 @@ def apply(board, s, models):
         d.model = {**d.model, **hit["model"], **keep, "assumed": False}
         done.append(d.key)
     return done
+
+
+# ---- the board's shared component list (components.py) --------------------------------
+def apply_components(s, comps):
+    """Hot-loop capacitors of cell s take the value and real model of the shared component with
+    their reference (a capacitor entered in Trace or PDN, or edited in another cell).  Returns the
+    keys of the parts it changed."""
+    from .. import components as CO
+    done = []
+    for d in s.devices:
+        e = comps.get(d.ref) if d.kind == "cap" else None
+        if e is None or e.model != "C" or not (e.part or e.C > 0):
+            continue
+        m = CO.cap_model(e, d.model)
+        if m != d.model:
+            d.model = m
+            done.append(d.key)
+    return done
+
+
+def cap_component(board, d):
+    """The shared component for cap device d: a C between its two pins' first pads, its model as the
+    real model; None when a pin has no pad."""
+    from .. import elements as EL
+    pins = d.pins(board)
+    ids = [board.pads[pins[p][0]].id for p in ("1", "2") if pins.get(p)]
+    if len(ids) != 2:
+        return None
+    return EL.Element(d.ref, ids[0], ids[1], 0.0, model="C", C=float(d.model.get("value") or 0.0),
+                      part=dict(d.model))

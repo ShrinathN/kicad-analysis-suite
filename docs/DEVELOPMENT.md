@@ -41,12 +41,13 @@ VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.s
 python3 -m pytest tests
 ```
 
-About 127 tests in about 75 s:
+About 132 tests in about 75 s:
 - `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results; regulators (LDO, dropout, switching, junction estimate), heat at parts, row values with SI prefixes.
 - `tests/test_loop.py`: Switching Loop: PEEC against analytic inductances, detection (buck, boost ICs, rail links, Kelvin sources, gate chains, 4-switch buck-boost), topologies and the operating point from the converter, transients against analytic RLC and ngspice, snubber, EMI spectrum, losses.
 - `tests/test_suite.py`: stackup parsing and the εr(f) model, scenario migration, the session, the component library and external tool detection.
 - `tests/test_linsolve.py`: the solver backends, copper coverage as a union, the setup cache and the thermal cell.
 - `tests/test_extract.py`: the cross-section solver against Hammerstad–Jensen and Wheeler, path tracing (vias, stubs, coplanar, missing return), pours (C, L and R against analytic values and the DC solver), elements across nets and to REF, R calibration, SPICE output, and runs of the subcircuit and a diode element in ngspice (skipped without ngspice).
+- `tests/test_components.py`: the shared component list: migration of the old per-tool lists, per-tool switches, saving, the DC file API, Switching Loop capacitor models, the Components window's operations.
 - `tests/test_matching.py`: the matching network maths (L-match, transformers, stubs, microstrip, Touchstone, S2P) and the tolerance analyses.
 
 ## GUI smoke tests and screenshots
@@ -80,6 +81,7 @@ pcb_current_sim/
   linsolve.py               sparse factorisation for every tool (SuperLU, optional PARDISO, CG fallback)
   thermal.py, magnetic.py   electro-thermal model, B-field maps and loop inductance
   elements.py               resistance elements (auto-detected resistors, user elements)
+  components.py             the board's shared component list: elements defined once, switched per tool
   results.py, export.py     result container, plots, PDF / HTML / CSV, 3D (plotly)
   vtk_export.py             ParaView (.vtm / .vti / .vtp / .pvd) writer, numpy only
   scenario.py               <board>.current_sim.json, one section per tool (version 2)
@@ -111,6 +113,7 @@ pcb_current_sim/
     plots.py                matplotlib figures (Smith, S11, S21, VSWR, histograms, tornado)
   wxgui/                    wx GUI (used inside KiCad)
     suite.py                Home, Suite menu, stackup / library / results / external windows
+    components.py           Components window (the board's shared parts between pads)
     app.py, viewer.py       DC & Thermal window and result viewer (2D, 3D, tables)
     matching.py             Matching & Tolerance window
     extract.py              Trace R/L/C → SPICE window

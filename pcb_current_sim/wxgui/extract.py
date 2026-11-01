@@ -201,6 +201,9 @@ class LadderCanvas(wx.ScrolledWindow):
         gc.DrawText("REF (return)", 14, Y1 + 18)
 
 
+TRACE_MODELS = ("R", "V", "C", "L")          # element models the extraction handles (not regulators)
+
+
 class ExtractFrame(wx.Frame):
     def __init__(self, session):
         super().__init__(None, title="Trace R/L/C → SPICE - PCB analysis suite", size=(1450, 940))
@@ -214,8 +217,8 @@ class ExtractFrame(wx.Frame):
         pref = lambda pid: pid.rsplit(".", 1)[0]          # noqa: E731 - pad id "R1.2" -> part "R1"
         self.probe = CrossProbe(self, session)
         self.probe.watch(self.plist, lambda lc: [pref(self.ports[i]) for i in selected_rows(lc) if i < len(self.ports)])
-        self.probe.watch(self.elist, lambda lc: [pref(p) for i in selected_rows(lc) if i < len(self.elements)
-                                                 for p in (self.elements[i].a, self.elements[i].b)])
+        self.probe.watch(self.elist, lambda lc: [pref(p) for k in self._esel() for p in (self.elements[k].a,
+                                                                                        self.elements[k].b)])
         session.listen(self._on_session)
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self._to_ui()
@@ -230,8 +233,7 @@ class ExtractFrame(wx.Frame):
         self.opts = X.Options(**{k: v for k, v in (d.get("options") or {}).items() if k in known})
         ids = {p.id for p in self.board.pads}
         self.ports = [p for p in d.get("ports", []) if p in ids]
-        ek = {f.name for f in fields(EL.Element)}
-        self.elements = [EL.Element(**{k: v for k, v in e.items() if k in ek}) for e in d.get("elements", [])]
+        self.elements = self.session.components.view("extract")     # the board's shared component list
         self.return_nets = [n for n in d.get("return_nets", []) if n in self.board.nets] if "return_nets" in d \
             else None
 
@@ -240,8 +242,7 @@ class ExtractFrame(wx.Frame):
             return
         try:
             SC.save_section(self.session.scenario_path, "extract",
-                            dict(ports=self.ports, return_nets=self._checked_nets(), options=asdict(self.opts),
-                                 elements=[asdict(e) for e in self.elements]))
+                            dict(ports=self.ports, return_nets=self._checked_nets(), options=asdict(self.opts)))
         except OSError as e:
             self._status(f"Could not save the setup: {e}")
 
@@ -256,6 +257,10 @@ class ExtractFrame(wx.Frame):
             self.board = self.session.board
             ids = {p.id for p in self.board.pads}
             self.ports = [p for p in self.ports if p in ids]
+            self.elements = self.session.components.view("extract")
+            wx.CallAfter(self._to_ui)
+        elif what == "components" and self.session.sharing != "extract":
+            self.elements = self.session.components.view("extract")
             wx.CallAfter(self._to_ui)
 
     # ------------------------------------------------------------- UI
@@ -301,12 +306,21 @@ class ExtractFrame(wx.Frame):
         eb = wx.StaticBoxSizer(wx.VERTICAL, left, "Elements between pads (R, diode, C, L)")
         ebox = eb.GetStaticBox()
         self.elist = AutoList(ebox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 110))
-        for k, (t, w) in enumerate((("On", 35), ("Name", 55), ("Kind", 85), ("Value", 80), ("Pads", 140))):
+        for k, (t, w) in enumerate((("On", 35), ("Name", 55), ("Kind", 85), ("Value", 80), ("Pads", 140),
+                                    ("Also used by", 90))):
             self.elist.InsertColumn(k, t, width=w)
+        self._erows = []                     # displayed row -> index into self.elements
         self.elist.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._el_edit())
         self.elist.SetToolTip("Parts placed between pads (resistors, diodes, ideal C and L); nets joined by "
-                              "them are modelled together. Double-click to edit")
+                              "them are modelled together. This is the board's shared component list: parts "
+                              "added in DC & Thermal show here too (switched off until you switch them on), and "
+                              "an edit changes the part in every tool. Double-click to edit")
         eb.Add(self.elist, 1, wx.EXPAND | wx.ALL, 4)
+        self.show_auto = wx.CheckBox(ebox, label="Show the board's resistors")
+        self.show_auto.SetToolTip("List every resistor footprint found on the board (switched off here unless you "
+                                  "switch it on). Unticked: only parts added by hand and resistors switched on")
+        self.show_auto.Bind(wx.EVT_CHECKBOX, lambda e: self._to_ui())
+        eb.Add(self.show_auto, 0, wx.LEFT | wx.BOTTOM, 4)
         row = wx.WrapSizer()
         for text, fn in (("Add…", self._el_add), ("Edit…", self._el_edit), ("On/off", self._el_toggle),
                          ("Remove", self._el_del)):
@@ -442,9 +456,14 @@ class ExtractFrame(wx.Frame):
             self.nets.Check(k, n in checked)
         self.elist.DeleteAllItems()
         kinds = {"R": "resistor", "V": "diode", "C": "capacitor", "L": "inductor"}
-        for e in self.elements:
+        show_auto = self.show_auto.GetValue()
+        self._erows = [k for k, e in enumerate(self.elements)
+                       if e.model in TRACE_MODELS and (show_auto or e.enabled or not e.auto)]
+        self._erows.sort(key=lambda k: EL.natural_key(self.elements[k].name))
+        for k in self._erows:
+            e = self.elements[k]
             self.elist.Append(["✓" if e.enabled else "–", e.name, kinds.get(e.model, e.model), e.describe(),
-                               f"{e.a} – {e.b}"])
+                               f"{e.a} – {e.b}", ", ".join(self.session.components.users(e, but="extract"))])
         o = self.opts
         for key, (t, kind) in self.fields.items():
             v = getattr(o, key)
@@ -535,28 +554,58 @@ class ExtractFrame(wx.Frame):
         r = self._el_dialog(preset or EL.Element("", "", "", 0.0))
         if r:
             self.elements = [e for e in self.elements if e.name != r.name] + [r]
-            self._to_ui()
+            self._el_changed()
+
+    def _esel(self):
+        """Indices into self.elements of the selected rows."""
+        return [self._erows[i] for i in selected_rows(self.elist) if i < len(self._erows)]
+
+    def _el_changed(self):
+        self.session.share("extract", self.elements)
+        self._to_ui()
 
     def _el_edit(self):
-        k = self.elist.GetFirstSelected()
-        if k >= 0:
-            r = self._el_dialog(self.elements[k])
+        sel = self._esel()
+        if sel:
+            k = sel[0]
+            old = self.elements[k]
+            r = self._el_dialog(old)
             if r:
-                r.enabled = self.elements[k].enabled
+                others = self.session.components.users(old, but="extract")
+                if r.name != old.name and others and wx.MessageBox(
+                        f"{old.name} is also used by {', '.join(others)}. Renamed, it is a new part there "
+                        "(switched off). Rename it?", "Elements", wx.YES_NO, self) != wx.YES:
+                    return
+                r.enabled = old.enabled
                 self.elements[k] = r
-                self._to_ui()
+                self._el_changed()
 
     def _el_toggle(self):
-        k = self.elist.GetFirstSelected()
-        if k >= 0:
+        for k in self._esel():
             self.elements[k].enabled = not self.elements[k].enabled
-            self._to_ui()
+        self._el_changed()
 
     def _el_del(self):
-        k = self.elist.GetFirstSelected()
-        if k >= 0:
-            del self.elements[k]
-            self._to_ui()
+        sel = self._esel()
+        if not sel:
+            return
+        cs = self.session.components
+        auto = [self.elements[k].name for k in sel if self.elements[k].auto]
+        shared = [f"{self.elements[k].name} ({', '.join(cs.users(self.elements[k], 'extract'))})"
+                  for k in sel if not self.elements[k].auto and cs.users(self.elements[k], "extract")]
+        if auto:
+            wx.MessageBox(f"Resistors found on the board ({', '.join(auto)}) cannot be removed; they are "
+                          "switched off here instead.", "Elements", parent=self)
+        if shared and wx.MessageBox("These parts are also used by other tools and will be removed there too:\n"
+                                    + "\n".join(shared) + "\n\nTo keep them there, switch them off here instead "
+                                    "(On/off). Remove?", "Elements", wx.YES_NO, self) != wx.YES:
+            return
+        for k in sorted(sel, reverse=True):
+            if self.elements[k].auto:
+                self.elements[k].enabled = False
+            else:
+                del self.elements[k]
+        self._el_changed()
 
     def _el_from_kicad(self):
         try:
@@ -596,7 +645,7 @@ class ExtractFrame(wx.Frame):
             return
         self.save()
         board, st, ports, opts = self.board, self.session.stackup, list(self.ports), X.Options(**asdict(self.opts))
-        els = [EL.Element(**asdict(e)) for e in self.elements]
+        els = [EL.Element(**asdict(e)) for e in self.elements if e.model in TRACE_MODELS]
         self._running = True
         self.run_b.Disable()
 
