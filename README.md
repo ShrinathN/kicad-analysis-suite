@@ -1,13 +1,14 @@
 # kicad-analysis-suite
 
-**PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has four tools so far:
+**PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has five tools so far:
 
 - **DC & Thermal**: current density, IR drop and temperature on a real board, including resistance elements, linear and switching regulators (with their losses and junction temperature), current pulses (fusing) and magnetic field maps.
 - **Switching Loop**: the hot loop and gate loops of a switching power stage (buck, boost, half-bridge, 4-switch buck-boost; synchronous or with a diode): loop inductance and where it sits, ringing frequency, gate-loop and common-source inductance, from a partial-inductance (PEEC) solve of the layout; switching edges in time, a snubber designer and an EMI estimate.
+- **PDN (AC)**: the impedance of a supply rail seen by each chip, from the board's copper, the decoupling capacitors and the regulator, against the target impedance; which capacitors matter, plane resonances, and the rail's voltage over time when the loads step, with the regulator's control loop fitted to its datasheet's load-transient plot.
 - **Trace R/L/C → SPICE**: R, L, C, Z₀ and delay of the copper between any pads, from a 2D field solve of each cross-section, exported as a SPICE RLC subcircuit.
 - **Matching & Tolerance**: draw an RF matching network with real parts, then see whether it still meets its specs across part tolerances.
 
-More tools (PDN, 3D extraction, full-wave export, signal integrity) are planned. See the [roadmap](docs/ROADMAP.md).
+More tools (3D extraction, full-wave export, signal integrity) are planned. See the [roadmap](docs/ROADMAP.md).
 
 ![Home window](docs/screenshots/home.png)
 
@@ -45,6 +46,16 @@ Pick the switch node (or let the tool find it): it finds the switching parts, th
 |---|---|
 | ![Summary](docs/screenshots/loop_summary.png) | ![Where the L is](docs/screenshots/loop_breakdown.png) |
 | ![Current map](docs/screenshots/loop_map.png) | ![Impedance](docs/screenshots/loop_impedance.png) |
+
+## PDN (AC)
+
+Pick a rail and its return nets: the tool finds the decoupling capacitors, the regulator and the chips on the rail, meshes the rail's copper over its return planes, and sweeps the impedance at every chip from 10 Hz to the GHz range.
+
+- Z(f) at each load against Z_target = V × deviation / ΔI, for the bare board, with the capacitors, and complete; the anti-resonance peaks and plane resonances.
+- A decap table: C at the rail voltage (DC bias), ESR, ESL, mounting inductance, resonance, distance to the nearest load and the band where each one carries the most current; "what if" each capacitor were left off.
+- Voltage maps of the rail at a chosen frequency (where a plane resonance sits).
+- The regulator as R + L or as its control loop, fitted to the load-transient plot of its datasheet: a built-in digitiser reads a screenshot (traces by colour, or by clicked points for black-and-white plots), and the fit transfers to your board's capacitance.
+- Load steps: each chip's current as a SPICE-style PULSE, and the rail's voltage at each chip over time, split by which load causes it.
 
 ## Trace R/L/C → SPICE
 

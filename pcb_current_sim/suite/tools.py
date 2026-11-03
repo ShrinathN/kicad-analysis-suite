@@ -20,7 +20,7 @@ TOOLS = (
          "Hot loop and gate loops of switching stages: loop L and where it sits, ringing, common-source L.",
          True),
     Tool("pdn", "PDN (AC)", "POWER",
-         "Z(f) against target impedance, decaps, VRM, plane resonances, loop L(f)."),
+         "Z(f) at the loads against the target impedance, decaps, regulator, plane resonances.", True),
     Tool("extract", "Trace R/L/C → SPICE", "SIGNAL & FIELDS",
          "R, L, C, Z₀ and delay of the copper between any pads (2D field solve); SPICE RLC subcircuit.", True),
     Tool("si", "SI & Fields", "SIGNAL & FIELDS",

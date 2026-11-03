@@ -47,13 +47,13 @@ class ComponentsFrame(wx.Frame):
             frow.Add(w, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
         top.Add(frow, 0, wx.LEFT | wx.RIGHT, 8)
         self.cols = ["Name", "Kind", "Value", "Real model", "Pads", "Nets", "Source"] + \
-            [CO.TOOLS[t] for t in SWITCHED] + [CO.TOOLS["loop"]]
+            [CO.TOOLS[t] for t in SWITCHED] + [CO.TOOLS["loop"], CO.TOOLS["pdn"]]
         self.list = AutoList(p, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
         for k, c in enumerate(self.cols):
             self.list.InsertColumn(k, c, width=90)
         self.list.SetToolTip("The board's shared components. The tool columns show where each part is switched "
-                             "on (✓); 'model' under Switching Loop: its capacitor model was edited there (each "
-                             "cell switches its capacitors itself). Double-click to edit; Shift / Ctrl-click to "
+                             "on (✓); 'model' under Switching Loop or PDN: its capacitor model was edited "
+                             "there (those tools switch their capacitors themselves). Double-click to edit; Shift / Ctrl-click to "
                              "select several")
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._edit())
         top.Add(self.list, 1, wx.EXPAND | wx.ALL, 8)
@@ -131,7 +131,7 @@ class ComponentsFrame(wx.Frame):
             text = [e.name, KIND.get(e.model, e.model), e.describe(), real, pads,
                     " – ".join(nets.get(pid, "?") or "no net" for pid in e.pads()), "board" if e.auto else "added"] + \
                 ["✓" if CO.used(e, t) else "–" for t in SWITCHED] + \
-                ["model" if CO.used(e, "loop") else ""]
+                ["model" if CO.used(e, t) else "" for t in ("loop", "pdn")]
             if words and not any(w in " ".join(text[:6]).lower() for w in words):
                 continue
             i = self.list.Append(text)

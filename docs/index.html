@@ -129,9 +129,11 @@ svg.flow .sm{font-size:11px; fill:var(--ink2)}
       <ol><li><a href="#trace-how">How it works</a></li><li><a href="#trace-use">Using it</a></li><li><a href="#trace-calc">Line calculator</a></li><li><a href="#trace-limits">Limits</a></li><li><a href="#trace-cases">Use cases</a></li></ol></li>
     <li><a href="#loop">Switching Loop</a>
       <ol><li><a href="#loop-how">How it works</a></li><li><a href="#loop-use">Using it</a></li><li><a href="#loop-ring">Ringing &amp; snubber explorer</a></li><li><a href="#loop-emi">Spectrum explorer</a></li><li><a href="#loop-limits">Limits</a></li><li><a href="#loop-cases">Use cases</a></li></ol></li>
+    <li><a href="#pdn">PDN (AC power integrity)</a>
+      <ol><li><a href="#pdn-how">How it works</a></li><li><a href="#pdn-use">Using it</a></li><li><a href="#pdn-reg">Regulator from the datasheet</a></li><li><a href="#pdn-calc">Impedance explorer</a></li><li><a href="#pdn-step">Load-step explorer</a></li><li><a href="#pdn-limits">Limits</a></li><li><a href="#pdn-cases">Use cases &amp; worked examples</a></li></ol></li>
     <li><a href="#match">Matching &amp; Tolerance</a>
       <ol><li><a href="#match-how">How it works</a></li><li><a href="#match-use">Using it</a></li><li><a href="#match-mc">Tolerance explorer</a></li><li><a href="#match-limits">Limits</a></li><li><a href="#match-cases">Use cases</a></li></ol></li>
-    <li><a href="#shared">Stackup, library and other panels</a></li>
+    <li><a href="#shared">Components, stackup, library</a></li>
     <li class="grp">Reference</li>
     <li><a href="#choose">Which tool for which question</a></li>
     <li><a href="#accuracy">Validation and accuracy</a></li>
@@ -147,17 +149,18 @@ svg.flow .sm{font-size:11px; fill:var(--ink2)}
 <h1 id="start">PCB Analysis Suite</h1>
 <p class="lead">A set of board-level simulation tools that run inside KiCad 10. They read the layout you drew, not a
 schematic, and answer the questions a schematic cannot: how hot this copper gets, how much voltage the planes lose, what
-inductance the hot loop of this converter has, what SPICE model this trace is, and whether this matching network
-survives real part tolerances.</p>
+inductance the hot loop of this converter has, whether this rail holds its voltage when the chips step their current,
+what SPICE model this trace is, and whether this matching network survives real part tolerances.</p>
 
 <div class="cards">
   <div class="card"><h4>DC &amp; Thermal <span class="badge ok">ready</span></h4><p>Current density, IR drop and copper temperature of any nets, with resistors, diodes and loads; short-pulse fusing; magnetic field maps; loop inductance.</p></div>
   <div class="card"><h4>Trace R/L/C → SPICE <span class="badge ok">ready</span></h4><p>Turns the copper between two or more pads (tracks, vias, pours) into an R-L-C ladder for any SPICE, with Z₀ and delay per segment.</p></div>
   <div class="card"><h4>Switching Loop <span class="badge ok">ready</span></h4><p>Hot-loop and gate-loop inductance of a buck, boost or half-bridge from its layout, the switching edges in time, a snubber designer, an EMI estimate, before/after comparison.</p></div>
+  <div class="card"><h4>PDN (AC) <span class="badge ok">ready</span></h4><p>A rail's impedance at each chip against the target, decap table and what-if, plane resonances, the regulator's loop fitted to its datasheet plot, and the rail's droop under load steps.</p></div>
   <div class="card"><h4>Matching &amp; Tolerance <span class="badge ok">ready</span></h4><p>An RF matching network with real parts: corners, Monte Carlo, worst-case search, yield per band, sensitivity and a BOM.</p></div>
 </div>
 
-<p>All tools run in one window process and share the board, its stackup and a component library. A Home window opens
+<p>All tools run in one window process and share the board, its stackup, a component library and the board's list of parts between pads. A Home window opens
 them; each saves its setup in a scenario file next to the board, so reopening the board brings everything back.</p>
 
 <div class="note"><b>How to read this page</b>Each tool has the same five parts: <em>how it works</em> (the physics and
@@ -200,12 +203,13 @@ two sets the inductance. This is why the same trace can be 0.4 nH/mm over a soli
 without one.</p>
 <h3>Scenario file</h3>
 <p>Each tool saves its setup in <code>&lt;board&gt;.current_sim.json</code> next to the board, in its own section
-(<code>stackup</code>, <code>dc</code>, <code>extract</code>, <code>loop</code>, <code>matching</code>). A tool rewrites only its
-section. Commit this file with the project if you want colleagues to open the same analyses.</p>
+(<code>stackup</code>, <code>components</code>, <code>dc</code>, <code>extract</code>, <code>loop</code>, <code>pdn</code>,
+<code>matching</code>). A tool rewrites only its section. Commit this file with the project if you want colleagues to open the same analyses.</p>
 <h3>Shared panels and KiCad link</h3>
 <ul>
   <li><b>Stackup &amp; materials</b>: copper thickness overrides (finished outer copper is often 45–60 µm, not 35) and εr/tanδ against frequency. Every tool reads it.</li>
-  <li><b>Component library</b>: real capacitors, inductors and resistors (tolerance, ESR/ESL, SRF, Q, DC-bias derating), used by Matching and Switching Loop.</li>
+  <li><b>Components</b>: the board's parts between pads (detected resistors plus anything you add: an inductor's DCR, a FET's R<sub>on</sub>, a diode, a capacitor, a regulator), defined once and switched on or off per tool. A capacitor's real model entered in Switching Loop is the one PDN uses. See <a href="#shared">Components</a>.</li>
+  <li><b>Component library</b>: real capacitors, inductors and resistors (tolerance, ESR/ESL, SRF, Q, DC-bias derating), used by Matching, Switching Loop and PDN.</li>
   <li><b>Highlight in KiCad</b>: clicking parts in a tool's list selects their footprints in the PCB editor (Suite menu to switch it off). Most tools also take pads from the current KiCad selection.</li>
   <li><b>Tooltips</b>: every input field in every window explains itself on hover.</li>
 </ul>
@@ -268,7 +272,7 @@ magnetic field the currents make.</p>
 <ol>
   <li><b>Board.</b> Opens with the board KiCad has open. "Refill zones + save" makes sure the file is current.</li>
   <li><b>Rows.</b> "Add…" a row (kind, + pads, − pads, amps or volts, a name), or select pads in KiCad (source first, then sink) and "Add from KiCad selection". Use KiCad's selection filter to pick pads, not footprints. Several pads on one side join with <code>+</code>.</li>
-  <li><b>Elements.</b> Check the detected resistors (value, power rating guessed from the package); add elements for FETs, inductors, fuses, diodes, external loads (untick "heats the board" for off-board parts).</li>
+  <li><b>Elements.</b> Check the detected resistors (value, power rating guessed from the package); add elements for FETs, inductors, fuses, diodes, external loads (untick "heats the board" for off-board parts). The list is a view of the board's shared <a href="#shared">Components</a>: an element added here can be switched on in the Trace tool too, and edits are saved at once.</li>
   <li><b>Regulators</b> ("Add regulator…"): linear or switching, its IN / OUT / GND pads, output voltage, I<sub>Q</sub>, the dropout (linear) or efficiency (switching), and Ψ<sub>JB</sub> for a junction estimate. Feed its input with a voltage-source row, put loads on its output.</li>
   <li><b>Settings.</b> Thermal on, ambient, h from temperature (default) or fixed, copper thickness overrides (finished copper), thermal cell size, error estimate, magnetic maps, pulse, "Heat at parts…".</li>
   <li><b>Run simulation</b> and read the results window: the map in the middle (layer and quantity in the bar above it: |J|, V, T, power density, |B|, B normal, T at the end of the pulse); the values at the pointer in a large box on the map; click to set a ΔV reference; the sidebar on the left has the exports and the summary and tables (select a table row to mark it on the map). Tabs above the map: 2D map and an interactive 3D view.</li>
@@ -383,7 +387,7 @@ also shows which balls see the lowest voltage.</dd>
   <li>Try more vias from the regulator to the plane, a second plane layer in parallel, or the sense point moved to the BGA; compare.</li>
 </ol></dd>
 <dt>What to look for</dt><dd>The load row's voltage against 0.85 V − 25 mV, with the error estimate's ± band; vias near the regulator carrying most of the current in the via table.</dd>
-<dt>Caveat</dt><dd>This is the DC part of the budget. The transient part (load steps, decoupling) is an AC question for the planned PDN tool.</dd>
+<dt>Caveat</dt><dd>This is the DC part of the budget. The transient part (load steps, decoupling) is an AC question: <a href="#pdn">PDN</a> on the same rail, with its target set to what is left of the ±25 mV after this drop.</dd>
 </dl></div>
 
 <div class="uc" id="uc-dc-pulse">
@@ -552,7 +556,8 @@ between pads) as a plain R-L-C subcircuit that any SPICE simulator runs, plus Z�
   <li><b>Return nets</b>: GND-like nets are ticked. Also tick a power plane that is decoupled to ground at the frequencies of
   interest if signals reference it.</li>
   <li><b>Elements</b> (optional): any two pads joined by R, a diode (V<sub>f</sub> + R), C or L, ideal. A decap from the signal
-  to a GND pad is a shunt C to REF.</li>
+  to a GND pad is a shunt C to REF. They are the board's shared <a href="#shared">Components</a>, switched on for this tool;
+  "Show the board's resistors" lists the detected ones too.</li>
   <li><b>Options</b>: f max (sets the section length and the εr used; enter the rise time and it suggests 0.35/t<sub>r</sub>),
   sample step and window, include stubs, calibrate R, dielectric loss.</li>
   <li><b>Extract</b>, then read the tabs: <em>Summary</em> (per path R, L, C, Z₀ range, delay, warnings), <em>Segments</em>
@@ -936,6 +941,331 @@ loss (I<sub>rms</sub>²R<sub>DS(on)</sub> at the duty cycle) and puts them on th
 FETs (see <a href="#uc-dc-fet">DC use case 7</a>).</dd>
 </dl></div>
 
+<h2 id="pdn">PDN (AC power integrity)</h2>
+<p class="lead">When a chip's current changes quickly, does its supply rail stay inside its noise budget? PDN computes the
+rail's impedance Z(f) as each chip sees it, from the board's copper, the decoupling capacitors and the regulator, compares it
+with the target impedance, and shows the rail's voltage over time while the loads step. The regulator can be its real
+control loop, fitted to the load-transient plot in its datasheet.</p>
+
+<h3 id="pdn-how">How it works</h3>
+<p>A chip draws its current in steps (a core waking up, a burst of I/O, a radio transmitting). The step has to come from
+somewhere at once: in the first nanoseconds from the planes and the nearest small capacitors, then from the bigger ones,
+and after some microseconds from the regulator, whose control loop needs time to react. Each source covers a frequency band,
+and the rail's impedance Z(f) is their parallel combination through the copper. A rail meets its budget when
+|Z(f)| × ΔI stays under the allowed deviation at every frequency the step contains:</p>
+<p style="text-align:center"><b>Z<sub>target</sub> = V × deviation / ΔI</b>, up to <b>f<sub>max</sub> ≈ 0.35 / t<sub>rise</sub></b>.
+&nbsp; 3.3 V ± 5 % with a 1 A step in 10 ns: 165 mΩ up to 35 MHz.</p>
+<p>Where two sources hand over, the impedance peaks: an <b>anti-resonance</b> between one capacitor's inductance and the next
+one's capacitance, or between the regulator's loop and the output capacitors. Those peaks, not the dips, decide pass or fail.</p>
+<svg class="flow" viewBox="0 0 900 200" role="img" aria-label="PDN solution flow">
+  <rect class="box" x="5" y="20" width="150" height="66" rx="8"/><text x="80" y="46" text-anchor="middle">Rail setup</text><text class="sm" x="80" y="66" text-anchor="middle">net, returns, parts</text>
+  <rect class="boxa" x="185" y="20" width="160" height="66" rx="8"/><text x="265" y="46" text-anchor="middle">Mesh rail copper</text><text class="sm" x="265" y="66" text-anchor="middle">over its return plane</text>
+  <rect class="box" x="375" y="20" width="160" height="66" rx="8"/><text x="455" y="46" text-anchor="middle">Ports</text><text class="sm" x="455" y="66" text-anchor="middle">decaps · regulator · loads</text>
+  <rect class="boxa" x="565" y="20" width="150" height="66" rx="8"/><text x="640" y="46" text-anchor="middle">Z(f) sweep</text><text class="sm" x="640" y="66" text-anchor="middle">sparse LU per f</text>
+  <rect class="box" x="745" y="20" width="150" height="66" rx="8"/><text x="820" y="46" text-anchor="middle">Target · decaps</text><text class="sm" x="820" y="66" text-anchor="middle">what if · map</text>
+  <rect class="box" x="375" y="118" width="160" height="62" rx="8"/><text x="455" y="143" text-anchor="middle">Regulator fit</text><text class="sm" x="455" y="162" text-anchor="middle">datasheet plot → loop</text>
+  <rect class="box" x="565" y="118" width="150" height="62" rx="8"/><text x="640" y="143" text-anchor="middle">Rational fit</text><text class="sm" x="640" y="162" text-anchor="middle">poles of Z(f)</text>
+  <rect class="box" x="745" y="118" width="150" height="62" rx="8"/><text x="820" y="143" text-anchor="middle">Load steps</text><text class="sm" x="820" y="162" text-anchor="middle">ΔV(t) per load</text>
+  <path class="arr" d="M155,53 H183"/><path class="arr" d="M345,53 H373"/><path class="arr" d="M535,53 H563"/><path class="arr" d="M715,53 H743"/>
+  <path class="arr" d="M455,116 V88"/><path class="arr" d="M640,88 V116"/><path class="arr" d="M715,149 H743"/>
+</svg>
+<ol>
+  <li><b>The rail's copper.</b> The power net's pours, tracks, vias and pads on every layer are meshed as in Switching
+  Loop, but the return is taken as the ideal reference: each piece of rail copper gets the inductance of copper over the
+  nearest return plane, μ₀·h per square (h = the dielectric to the nearest return copper above or below; with both, the two
+  in parallel), its skin-effect resistance, and the parallel-plate C = ε₀ε<sub>r</sub>A/h to the return with the laminate's
+  loss tangent. Narrow tracks are microstrips over the return; rail vias pair with the nearest return via. Plane resonances
+  come out of this mesh by themselves.</li>
+  <li><b>Decaps.</b> Each capacitor between the rail and a return net is its model: C at the rail voltage (DC-bias derating
+  of ceramics), ESR, ESL, plus the <em>mounting inductance on its return side</em> (the via from its ground pad down to the
+  plane, from the via's position). Its rail side (pad, track, vias) is already part of the mesh. The model comes from the
+  board's shared component list (so a model entered in Switching Loop is used here), else a generic one from the Value and
+  package.</li>
+  <li><b>Regulator.</b> Either an output R + L, or its control loop fitted to the datasheet (below). The loop model is an
+  admittance: the current the regulator pushes into the rail per volt the rail sags, Y(s), which reacts to <em>your</em>
+  board's capacitance.</li>
+  <li><b>Loads.</b> The chips' rail pins, one port per chip. The network is solved at each frequency (sparse LU, all loads at
+  once): Z at each load, between loads, and each decap's share of the current.</li>
+  <li><b>Load steps.</b> Each Z(f) is fitted with a rational function (vector fitting: poles and residues, to about 1 %),
+  whose response to a current ramp has a closed form at any time. So nanosecond ringing of the planes and the regulator's
+  millisecond recovery come out of one model without time-stepping the mesh. Each load's current is a PULSE as in SPICE;
+  rising edges use the regulator's rising-step fit and falling edges its falling-step fit. Being linear, every load's share of
+  every other load's droop can be shown separately.</li>
+</ol>
+
+<h3 id="pdn-use">Using it</h3>
+<ol>
+  <li><b>Rail.</b> Pick the power net (nets with capacitors to a ground-like net come first) and tick its return nets. "Find
+  the rail's parts again" detects the decaps, the regulator's output (a regulator in Components with its OUT pad on the rail,
+  else a buck inductor's rail pad) and the loads (ICs with pins on the rail).</li>
+  <li><b>Target (noise budget).</b> Rail voltage (also the capacitors' DC bias), allowed deviation in %, load step ΔI and its
+  rise time. The window shows Z<sub>target</sub> and the frequency it holds to.</li>
+  <li><b>Decaps.</b> Check the models ("Edit model…", "From library…"); "On / off" is the quickest what-if. An edited model goes
+  into the shared component list, so Switching Loop and later runs see it.</li>
+  <li><b>Regulator.</b> "Output R + L" for a first look, or "Fit from the datasheet plot…" and then the fitted loop.</li>
+  <li><b>Loads.</b> Add or remove parts; "Edit step…" gives each its PULSE (step, delay, rise, width, fall, period);
+  "Stagger" gives every load the target's step, one after another, so each one's effect shows on its own. Tick "Simulate the
+  load steps".</li>
+  <li><b>Analyse.</b> Tabs: <em>Impedance</em> (|Z| for the board alone, with the decaps, and complete, against the target),
+  <em>Decaps</em> (C at bias, ESR, ESL, mounting L and how it was found, series resonance, distance to the load, the largest
+  share of the load current it carries and the band where it carries at least a quarter), <em>What if</em> ("Remove each decap
+  in turn"), <em>Load steps</em> (currents and the voltage at a load, total and split by whose step causes it, with the
+  allowed band; CSV), <em>Map</em> (the rail's voltage per amp at a resonance, per layer) and <em>Summary</em> (pass / fail per
+  load, the worst frequency, resonance peaks, warnings).</li>
+</ol>
+
+<h3 id="pdn-reg">Regulator model from the datasheet plot</h3>
+<p>A regulator's datasheet rarely gives its output impedance, but almost always shows a <b>load-transient plot</b>: the load
+current stepping and the output voltage dipping and recovering, with a stated output capacitor. That plot is the regulator's
+loop answering a step through that capacitor. Fit a small loop model to it, and the model answers just as well on your
+board's capacitance, which is rarely the datasheet's.</p>
+<ol>
+  <li><b>Image.</b> "Open image…" or "Paste" a screenshot (zoom the PDF in first), or "Import CSV…" from another digitiser
+  (columns t, i, v).</li>
+  <li><b>Mark the plot area (2 clicks)</b>: the grid's top-left and bottom-right corners; divisions (10 × 8 on most scopes) and
+  the time per division.</li>
+  <li><b>Read both traces</b>, load current and output voltage, each with its scale per division. Per trace:
+    <ul>
+      <li><em>by colour</em>: "Pick colour", click the trace. Coloured traces are matched by hue (the dark edges of a blue and a
+      magenta trace look alike in RGB, not in hue), black or grey ones by colour distance. Labels and markers of the same colour
+      are skipped. Where the trace hides under a label or crosses another, "Edit as points" turns it into a few dozen editable
+      points.</li>
+      <li><em>by points</em> (black-and-white plots, or to correct): "Click points": left click adds, right click removes the
+      nearest, a right-drag box removes all inside it, Backspace / "Undo" the last; Esc ends. Put points at each corner of the
+      step, at the bottom of the dip and the top of the overshoot, and a few along the recovery. Zoom with the toolbar; clicking
+      keeps the zoom.</li>
+    </ul></li>
+  <li><b>Datasheet test circuit and control type</b>: the output C of the test (from the plot's application circuit, after DC
+  bias if you know it) and its ESR; the control type from the datasheet's first page (current-mode, voltage-mode, constant
+  on-time, LDO, "Ringing recovery", "General", or "Try every type and keep the best"); for a boost, V<sub>in</sub>,
+  V<sub>out</sub>, I<sub>out</sub> and the inductor, which set its right-half-plane zero.</li>
+  <li><b>Fit options</b>: "Fit up to … after each edge" (leave out what follows the recovery), "Also fit the test capacitance
+  (±50 %) and its ESR", "Match the peak deviation first".</li>
+  <li><b>Fit.</b> Rising and falling steps are fitted separately (regulators answer them differently). The Fit tab overlays
+  model and plot per edge and plots |Z<sub>out</sub>| with the test C and with 10× it. "Use for this rail".</li>
+</ol>
+<p>The model: Y(s) = K·(s + ω<sub>z</sub>)/(s + ω<sub>0</sub>) · (1 + s/ω<sub>z2</sub>) / (1 + s/ω<sub>p</sub>) /
+(1 + s/(Qω<sub>n</sub>) + s²/ω<sub>n</sub>²) · (1 − s/ω<sub>rhp</sub>). K is the loop's speed (crossover ≈ K / 2πC), the zero
+its integrator corner, the pole where it stops keeping up; the second zero and the resonant pair only in the Ringing and
+General types. The fit never returns a loop that would be unstable with the test capacitance, and it flags any parameter that
+ends at the edge of its range: a sign the model is being stretched to explain something it can't.</p>
+<div class="warn"><b>When the fit stays loose</b>Check, in this order: the drawn traces follow the plot everywhere (a trace
+running under a label, or a colour pick that wandered onto the other trace, is the most common cause); the plot area and the
+scales; the test capacitance; the control type. A <b>light-load plot</b> (the inductor current comes in bursts and the output
+saw-tooths between them) shows pulse-skipping, which is not a linear loop: use the datasheet's heavier-load plot, or fit only
+the first recovery with the window. A narrow spike right at the edge (a microsecond or two) is usually the probe picking up the
+load step.</div>
+
+<h3 id="pdn-calc">Impedance explorer</h3>
+<p>A lumped version of what the tool solves on the layout: the regulator, two groups of capacitors with their ESL and
+mounting inductance, and the plane capacitance, all in parallel at one point. The tool adds the copper between them (spreading
+inductance, plane resonances, distance from each capacitor to each load); the hand-over peaks behave the same way.</p>
+<div class="widget" id="w-pdn">
+  <h4>Rail impedance against the target</h4>
+  <div class="controls">
+    <label>Rail voltage <span class="v" data-o="pV"></span><input type="range" id="pV" min="0.6" max="12" step="0.05" value="3.3"></label>
+    <label>Allowed deviation <span class="v" data-o="pD"></span><input type="range" id="pD" min="1" max="10" step="0.5" value="5"></label>
+    <label>Load step ΔI <span class="v" data-o="pI"></span><input type="range" id="pI" min="0.1" max="20" step="0.1" value="1"></label>
+    <label>Step rise time <span class="v" data-o="pT"></span><input type="range" id="pT" min="0" max="3" step="0.05" value="1"></label>
+    <label>Regulator<select id="pReg"><option value="loop" selected>control loop (current mode)</option><option value="rl">output R + L</option></select></label>
+    <label>Loop speed K <span class="v" data-o="pK"></span><input type="range" id="pK" min="0.5" max="50" step="0.1" value="9.4"></label>
+    <label>Output R (R + L) <span class="v" data-o="pR"></span><input type="range" id="pR" min="1" max="100" step="1" value="5"></label>
+    <label>Output L (R + L) <span class="v" data-o="pL"></span><input type="range" id="pL" min="10" max="1000" step="10" value="230"></label>
+    <label>Bulk caps: count × C <span class="v" data-o="pA"></span><input type="range" id="pA" min="0" max="8" step="1" value="2"></label>
+    <label>Bulk C each (at bias) <span class="v" data-o="pAC"></span><input type="range" id="pAC" min="1" max="2.5" step="0.01" value="1.18"></label>
+    <label>Small caps: count <span class="v" data-o="pB"></span><input type="range" id="pB" min="0" max="16" step="1" value="4"></label>
+    <label>Small cap value<select id="pBC"><option value="1e-8">10 nF</option><option value="1e-7" selected>100 nF</option><option value="1e-6">1 µF</option><option value="4.7e-6">4.7 µF</option></select></label>
+    <label>Small cap package<select id="pBP"><option value="0.3">0201 (0.3 nH)</option><option value="0.4" selected>0402 (0.4 nH)</option><option value="0.6">0603 (0.6 nH)</option><option value="0.8">0805 (0.8 nH)</option></select></label>
+    <label>Mounting L per small cap <span class="v" data-o="pM"></span><input type="range" id="pM" min="0.1" max="3" step="0.05" value="0.6"></label>
+    <label>Plane C <span class="v" data-o="pP"></span><input type="range" id="pP" min="0" max="20" step="0.1" value="1"></label>
+  </div>
+  <div class="out" id="po"></div>
+  <canvas class="plot" id="pplot" aria-label="Rail impedance against frequency"></canvas>
+  <div class="legend"><i style="background:var(--c1)"></i>|Z| complete <i style="background:var(--mute)"></i>without the regulator <i style="background:var(--c4)"></i>target, up to 0.35 / t<sub>rise</sub></div>
+</div>
+<p>Defaults: the worked example below. Bulk caps: ESR 5 mΩ, ESL 0.8 nH + 1 nH mounting each. Small caps: ESR 30 / 30 / 10 /
+5 mΩ for 10 nF / 100 nF / 1 µF / 4.7 µF. Plane: loss tangent 0.02. Loop: zero at 10 kHz, pole at 200 kHz. Things to try: double
+the small caps and watch the peak between the two groups move rather than vanish; change their value instead; switch the
+regulator to R + L with a few mΩ and see the sharp peak that a real loop's phase margin does not have.</p>
+
+<h3 id="pdn-step">Load-step explorer: the same regulator on another capacitor</h3>
+<p>The model PDN fits: a current-mode loop Y(s) = K(s + ω<sub>z</sub>)/(s(1 + s/ω<sub>p</sub>)) driving the output capacitors,
+with a 1 A step. Set the datasheet's capacitance and your board's, and compare. The defaults are the values fitted to a
+current-mode boost converter's datasheet plot (K 5.9 S, zero 9 kHz, pole 70 kHz, 44 µF).</p>
+<div class="widget" id="w-step">
+  <h4>Output voltage after a load step: datasheet capacitor against yours</h4>
+  <div class="controls">
+    <label>Loop speed K <span class="v" data-o="qK"></span><input type="range" id="qK" min="0.5" max="40" step="0.1" value="5.9"></label>
+    <label>Zero f<sub>z</sub> <span class="v" data-o="qZ"></span><input type="range" id="qZ" min="0.5" max="50" step="0.5" value="9"></label>
+    <label>Pole f<sub>p</sub> <span class="v" data-o="qP"></span><input type="range" id="qP" min="10" max="500" step="5" value="70"></label>
+    <label>Datasheet C <span class="v" data-o="qC0"></span><input type="range" id="qC0" min="2" max="500" step="1" value="44"></label>
+    <label>Your board's C <span class="v" data-o="qC1"></span><input type="range" id="qC1" min="2" max="500" step="1" value="10"></label>
+    <label>ESR <span class="v" data-o="qE"></span><input type="range" id="qE" min="0" max="50" step="0.5" value="3"></label>
+    <label>Load step <span class="v" data-o="qI"></span><input type="range" id="qI" min="0.1" max="5" step="0.1" value="1"></label>
+    <label>Step rise time <span class="v" data-o="qT"></span><input type="range" id="qT" min="0.05" max="20" step="0.05" value="1"></label>
+  </div>
+  <div class="out" id="qo"></div>
+  <canvas class="plot" id="qplot" aria-label="Output voltage deviation after a load step"></canvas>
+  <div class="legend"><i style="background:var(--mute)"></i>datasheet C <i style="background:var(--c1)"></i>your board's C</div>
+</div>
+<p>Two things show up. Above the crossover the capacitor alone carries the step, so less C dips deeper; but once the
+crossover K / 2πC drops below the zero, more C lowers the dip less and less while the recovery slows and overshoots: the
+compensation, not the capacitor, mostly sets the dip there. An R + L model fitted at the datasheet's C would miss both, which is why
+PDN fits the loop.</p>
+
+<h3 id="pdn-limits">Limits</h3>
+<div class="limit"><b>What PDN does not model</b>
+<ul>
+  <li><b>No ground bounce.</b> The return is the ideal reference; voltage between distant ground pins is not computed.</li>
+  <li><b>Linear.</b> Capacitors at their DC-bias value, the regulator linearised (R + L, or its fitted loop): no switching
+  ripple, no slew or current limit, no pulse-skipping (PFM) mode, no soft start. Voltages are changes from before the first
+  step; the DC drop is DC &amp; Thermal's.</li>
+  <li><b>2.5D, not full-wave.</b> Good to the low GHz. Two-layer boards without a solid return under the rail are much less
+  accurate (warned).</li>
+  <li><b>The chip's package and die</b> (bond wires, on-die capacitance) are not included: Z is at the board pads.</li>
+  <li><b>Feedback sense point.</b> The regulator senses at its own output pin; a remote-sense line is not modelled.</li>
+  <li><b>The fitted loop</b> is as good as the plot: a light-load plot in burst mode, a test C that differs from the stated
+  one, or a hidden trace limit it. The fit says which parameters hit their limits.</li>
+  <li><b>Not yet:</b> Touchstone export, layout warnings beyond missing return copper, a store of fitted regulator models by
+  part number.</li>
+</ul></div>
+
+<h3 id="pdn-cases">Use cases and worked examples</h3>
+
+<div class="uc" id="uc-pdn-mcu">
+<h4>1. Worked example: decoupling a 3.3 V rail for a 1 A step</h4>
+<p class="who">Board designer, a 3.3 V rail from a buck converter (≈ 50 kHz loop) feeding an FPGA's I/O banks: 1 A steps in about 10 ns, ±5 % allowed.</p>
+<dl>
+<dt>The numbers by hand</dt><dd><ul>
+  <li>Target: 3.3 V × 5 % / 1 A = <b>165 mΩ</b>, up to 0.35 / 10 ns = <b>35 MHz</b>.</li>
+  <li>Bulk: 2 × 22 µF 0805 X5R, about 15 µF each at 3.3 V (check the curve: half the nominal value is common). The loop's
+  crossover with them is K / 2πC = 9.4 S / (2π × 30 µF) ≈ 50 kHz.</li>
+  <li>Small: 4 × 100 nF 0402, 0.4 nH ESL + 0.6 nH mounting each: each one resonates at 1/(2π√(1 nH × 100 nF)) ≈ 16 MHz.</li>
+  <li>Hand-over: the bulk pair's inductance (0.9 nH) against the four small ones (0.4 µF) gives an anti-resonance near
+  1/(2π√(0.9 nH × 0.4 µF)) ≈ 8 MHz.</li>
+</ul></dd>
+<dt>What the explorer gives (its defaults)</dt><dd>The worst point inside 35 MHz is <b>174 mΩ at 7.4 MHz</b>: the
+anti-resonance, 6 % over the target. The regulator's own hand-over (113 mΩ at 26 kHz) passes. Fixes, each tried in the explorer:
+<table>
+<thead><tr><th>Change</th><th>Worst |Z| ≤ 35 MHz</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td>As above (4 × 100 nF)</td><td>174 mΩ at 7.4 MHz</td><td>fails by 6 %</td></tr>
+<tr><td>No small caps</td><td>202 mΩ at 35 MHz (the bulk's ESL)</td><td>fails</td></tr>
+<tr><td>8 × 100 nF</td><td>154 mΩ at 5.6 MHz</td><td>passes, 7 % margin</td></tr>
+<tr><td>4 × 1 µF 0402 instead</td><td>113 mΩ at 24 kHz; the MHz peak falls to 30 mΩ</td><td>passes, 32 % margin</td></tr>
+</tbody></table>
+Four 1 µF beat eight 100 nF: the larger value closes the gap to the bulk caps, so the hand-over is shallow.</dd>
+<dt>Then on the board</dt><dd><ol>
+  <li>PDN: rail +3V3, return GND; "Find the rail's parts again". Check that the decaps' C at bias reads ≈ 15 µF for the 22 µF parts.</li>
+  <li>Target 3.3 V, 5 %, 1 A, 10 ns. Regulator "Output R + L" for now, or its fitted loop (use case 3). Analyse.</li>
+  <li>Impedance tab: the same hand-over peak, plus what the explorer cannot know: the mounting L from each cap's real vias (Decaps
+  tab: "Mounting L (return)"), the plane's spreading inductance between the caps and the FPGA, and plane resonances.</li>
+  <li>Change the caps in the schematic and layout, or first just "Edit model…" a few of them to 1 µF to test the idea; Analyse again.</li>
+</ol></dd>
+<dt>Caveat</dt><dd>The 165 mΩ target is conservative: it assumes the load repeats at the worst frequency. The Load steps tab
+shows what a single step does (often less: use case 5).</dd>
+</dl></div>
+
+<div class="uc" id="uc-pdn-trim">
+<h4>2. Trimming the decoupling from a copied reference design</h4>
+<p class="who">Cost-down: a microcontroller board carries 14 capacitors on its 3.3 V rail, copied from an evaluation board.</p>
+<dl>
+<dt>Situation</dt><dd>Every 100 nF costs placement and board area, but nobody wants to remove the one that mattered.</dd>
+<dt>Why this tool</dt><dd>"What if" removes each capacitor in turn and reports the worst rise of |Z| and whether the target
+still holds; the Decaps tab shows which band each capacitor actually serves and how far it is from the load.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Set the target from the MCU's datasheet (supply tolerance, the current step of its fastest mode). Analyse.</li>
+  <li>What if → "Remove each decap in turn". Read the "Worst |Z| rise" column.</li>
+  <li>Candidates: rises of a few % with "Target still met", far from the load, carrying little in the Decaps tab. Switch two
+  or three of them "On / off" together and Analyse again: removing several at once is not the sum of removing each.</li>
+</ol></dd>
+<dt>What to look for</dt><dd>Capacitors of the same value next to each other (one usually does the work), caps far from any
+load pin, and a cap whose removal <em>lowers</em> |Z| somewhere: it was making an anti-resonance.</dd>
+</dl></div>
+
+<div class="uc" id="uc-pdn-reg">
+<h4>3. Worked example: a regulator model from its datasheet plot</h4>
+<p class="who">Any rail fed by a converter or LDO whose datasheet shows a load-transient plot.</p>
+<dl>
+<dt>Situation</dt><dd>The datasheet's plot was taken with 2 × 22 µF; your board has different capacitors. An "output R + L"
+guess decides the low-frequency end of Z(f) and the whole recovery of a load step.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Regulator box: "Fit from the datasheet plot…". Paste a screenshot of the plot (zoomed PDF).</li>
+  <li>"Mark the plot area (2 clicks)"; 10 × 8 divisions; time per division from the plot (e.g. 200 µs/div).</li>
+  <li>Current trace: "Pick colour" and click it; scale (e.g. 500 mA/div). Voltage trace: the same (e.g. 100 mV/div, AC coupled).
+  A black-and-white plot: "by points", and click 20–40 points along each trace.</li>
+  <li>The test C from the datasheet's application circuit (after DC bias if known), its ESR, the control type ("Try every type
+  and keep the best" if unsure), for a boost its V<sub>in</sub>, V<sub>out</sub>, I<sub>out</sub> and inductor. Fit.</li>
+  <li>Fit tab: model over the plot per edge, rms error, crossover. "Use for this rail"; Analyse the rail.</li>
+</ol></dd>
+<dt>What it gave</dt><dd>On a current-mode boost converter's plot (1 → 2 A, 44 µF): current-mode, both edges within <b>2 %</b> rms
+(2 mV of a 130 mV dip), K 5.9 / 4.6 S (rising / falling), zero near 9 kHz, crossover about 20 kHz. A constant-on-time model fits
+7× worse, as it should for a current-mode part. The same plot read from a grey copy by 30 + 79 clicked points: crossover 18.6 /
+17.0 kHz, 2–3 %. A light-load capture (a 50 mA step, the converter in burst mode) fitted only to 7–8 % even with the
+window and a free test C, and the C ran to its −50 % limit: the lesson is in the warning box above (light load is not a linear
+loop; the stated test C may not be what was fitted).</dd>
+<dt>Then</dt><dd>On a 4-layer board's 3.3 V rail with that loop (as a demonstration): Z(f) peaks at 242 mΩ near 19 kHz (the
+loop handing over to the capacitors), while a 1 A step dips 152–157 mV, inside its ±165 mV. Both are right: see use case 5.</dd>
+</dl></div>
+
+<div class="uc" id="uc-pdn-cout">
+<h4>4. Worked example: how much output capacitance does the regulator need?</h4>
+<p class="who">Designer choosing between 10 µF and 220 µF on a regulator's output, from its fitted loop.</p>
+<dl>
+<dt>The numbers</dt><dd>With the boost converter's loop above (K 5.9 S, zero 9 kHz, pole 70 kHz, 3 mΩ ESR) and a 1 A step in 1 µs, the
+step explorer (same model and the same numbers as the tool's solver):
+<table>
+<thead><tr><th>Output C</th><th>Crossover K / 2πC</th><th>Dip</th><th>Back within 10 %</th><th>Overshoot after</th></tr></thead>
+<tbody>
+<tr><td>10 µF</td><td>94 kHz</td><td>231 mV</td><td>33 µs</td><td>none</td></tr>
+<tr><td>22 µF</td><td>43 kHz</td><td>171 mV</td><td>37 µs</td><td>none</td></tr>
+<tr><td>44 µF (datasheet)</td><td>21 kHz</td><td>134 mV</td><td>39 µs</td><td>3 mV</td></tr>
+<tr><td>100 µF</td><td>9.4 kHz</td><td>103 mV</td><td>98 µs</td><td>19 mV</td></tr>
+<tr><td>220 µF</td><td>4.3 kHz</td><td>78 mV</td><td>216 µs</td><td>27 mV</td></tr>
+</tbody></table></dd>
+<dt>Reading it</dt><dd>Five times the capacitance (44 → 220 µF) takes the dip from 134 to 78 mV, not to a fifth, and the
+recovery takes five times longer with an overshoot: the crossover has fallen below the compensation zero. Below the datasheet's C
+the dip grows quickly. If the dip must shrink further, the regulator's compensation (or a faster part) is the lever, not more C;
+the regulator's datasheet usually limits the output C range for the same reason.</dd>
+<dt>On the board</dt><dd>PDN with the fitted loop, the capacitors as placed, "Simulate the load steps": the dip at each load,
+including the copper between the capacitors and the load.</dd>
+</dl></div>
+
+<div class="uc" id="uc-pdn-multi">
+<h4>5. Several chips on one rail: whose step causes the dip?</h4>
+<p class="who">A 3.3 V rail shared by an MCU, a radio and a sensor; the radio transmits in bursts.</p>
+<dl>
+<dt>Situation</dt><dd>The MCU resets occasionally when the radio transmits. Is the rail the cause, and which load is to blame
+for the dip at the MCU's pins?</dd>
+<dt>Why this tool</dt><dd>The load-step simulation is linear, so the voltage at each load splits exactly into what each load's
+current causes, with the copper between them included.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Loads: all three parts. "Edit step…" per load with its real current profile, e.g. the radio 0.25 A for 2 ms every 10 ms
+  (rise 2 µs), the MCU 50 mA bursts.</li>
+  <li>Or "Stagger" first: every load gets the target's step, one after another, so each one's effect is seen alone.</li>
+  <li>Analyse; Load steps tab: "Voltage at" the MCU, split by source; the summary names the worst moment and its main cause.</li>
+</ol></dd>
+<dt>Z target or load step?</dt><dd>Z<sub>target</sub> × ΔI is what a load that repeats at the worst frequency would cause;
+one step puts only part of its energy there. A rail can fail Z(f) and pass a single step (the 3.3 V rail in use case 3: 242 mΩ peak, a 1 A
+step dips 157 mV). Use the Z check for loads that can toggle at any rate (digital cores, PWM), the step check for known profiles
+(a radio's bursts).</dd>
+</dl></div>
+
+<div class="uc" id="uc-pdn-plane">
+<h4>6. A plane resonance near a clock harmonic: where does a capacitor help?</h4>
+<p class="who">EMC fix on a 4-layer board: an emission peak at 400 MHz, and a power–ground plane pair under it.</p>
+<dl>
+<dt>Situation</dt><dd>A plane pair is a cavity: its first resonance is c / (2a√ε<sub>r</sub>) for a side a (a 100 mm board on
+FR4: about 720 MHz; partly filled or irregular planes resonate lower). At a resonance the planes have voltage hot spots that
+radiate and couple into I/O.</dd>
+<dt>Steps</dt><dd>Analyse with f max above the peak (1 GHz) and enough mesh cells (the summary warns when the mesh is too coarse
+for f max). Summary: the resonance peaks. Map tab: enter the peak's frequency; the hot spots per layer. A small capacitor with
+short mounting at a hot spot damps it; one at a voltage null does nothing. Edit or add the cap and Analyse again.</dd>
+<dt>Caveat</dt><dd>2.5D: good to the low GHz. The emission itself is not computed; the map shows where the rail's voltage
+swings.</dd>
+</dl></div>
+
+
 <h2 id="match">Matching &amp; Tolerance</h2>
 <p class="lead">Build an RF matching network from real parts and see whether it still matches when every part sits
 anywhere in its tolerance: corners, Monte Carlo, a worst-case search, yield per band, which part matters most, and the BOM.</p>
@@ -1064,16 +1394,29 @@ off the S21 plot with its tolerance band (the specs cover return loss, insertion
 Monte Carlo; adjust; BOM.</dd>
 </dl></div>
 
-<h2 id="shared">Stackup, library and other panels</h2>
+<h2 id="shared">Components, stackup, library and other panels</h2>
 <figure><img src="screenshots/home.png" alt="Home window with the tool tiles" loading="lazy"><figcaption>Home: the board, its stackup, the scenario file's contents and the tools.</figcaption></figure>
 <ul>
+  <li><b>Components</b> (Home, shared row). The board's list of parts between pads: resistors found from their footprint and
+  Value, plus parts you add (a resistance such as an inductor's DCR or a FET's R<sub>on</sub>, a diode, a capacitor, an inductor,
+  a regulator). Each is defined once; each tool switches it on or off for itself (columns DC, Trace, Loop, PDN; detected
+  resistors start on in DC &amp; Thermal only). DC &amp; Thermal and Trace use the ideal value; Switching Loop and PDN use the
+  capacitor's <em>real model</em> (ESR, ESL, DC bias, a library part), stored with the part, so it is entered once for both.
+  Changes are saved at once; deleting or renaming a part another tool uses asks first. Older scenario files with separate DC and
+  Trace lists are merged on first load.
+  <div class="uc" id="uc-components"><h4>Example: one inductor, three tools</h4>
+  <p>A buck converter's 4.7 µH inductor L1 has a DCR of 18 mΩ. In DC &amp; Thermal, "Add…" an element across L1's pads, 18 mΩ:
+  the output current now flows through it and heats its pads. In the Trace tool the same L1 shows in the Elements list with
+  "Also used by: DC": switch it on (and change its kind to L for an AC model) to extract the input path through it. Its output
+  capacitors' ESR and ESL entered in Switching Loop ("Edit model…") are what PDN shows in its Decaps tab, marked "model" in the
+  Components window.</p></div></li>
   <li><b>Stackup &amp; materials.</b> Copper and dielectric thickness per layer from the board, with overrides (finished
   outer copper after plating is often 45–60 µm on "1 oz" boards: it changes resistances by 30 %). ε<sub>r</sub> and tanδ
   per dielectric, editable at a reference frequency, with the wideband Djordjevic–Sarkar model for their frequency
   dependence (ε<sub>r</sub> falls slowly with f, tanδ nearly flat).<br><img src="screenshots/stackup.png" alt="Stackup panel" loading="lazy" style="max-width:520px"></li>
   <li><b>Component library.</b> Built-in generic parts plus your own (<code>~/.config/pcb_current_sim/library.json</code>):
   tolerance and parasitics, DC-bias derating for ceramics, a |Z| and Q plot at nominal and at the limits. Used by Matching and
-  by Switching Loop's capacitors.<br><img src="screenshots/component_library.png" alt="Component library" loading="lazy" style="max-width:520px"></li>
+  by Switching Loop's and PDN's capacitors ("From library…").<br><img src="screenshots/component_library.png" alt="Component library" loading="lazy" style="max-width:520px"></li>
   <li><b>Results browser.</b> Saved DC results (<code>.npz</code> + <code>.json</code>) under the board folder, to reopen.</li>
   <li><b>External tools.</b> Detects openEMS, FastHenry, FastCap and ParaView. From the KiCad Flatpak, host programs can only
   be started after <code>flatpak override --user --talk-name=org.freedesktop.Flatpak org.kicad.KiCad</code>.</li>
@@ -1094,11 +1437,15 @@ Monte Carlo; adjust; BOM.</dd>
 <tr><td>Which layout variant is better for EMI?</td><td>Switching Loop (EMI + Compare)</td><td>margin change in dB</td></tr>
 <tr><td>Will my regulator overheat? Is it in dropout at the far end of the input?</td><td>DC &amp; Thermal</td><td>regulator P, T<sub>j</sub>, headroom</td></tr>
 <tr><td>Does my matching network survive part tolerances? Which code to buy?</td><td>Matching &amp; Tolerance</td><td>yield, worst case, sensitivity</td></tr>
-<tr><td>Does my rail stay within its ripple budget under load steps?</td><td>PDN (planned)</td><td>Z(f) against target</td></tr>
+<tr><td>Is my decoupling enough for this chip's current steps? Where does Z(f) peak?</td><td>PDN</td><td>Z(f) against target, peaks</td></tr>
+<tr><td>Which decaps can I remove from the BOM?</td><td>PDN (What if)</td><td>|Z| rise per removed cap</td></tr>
+<tr><td>How far does the rail dip when the loads step, and whose step causes it?</td><td>PDN (Load steps)</td><td>ΔV(t) per load, split by source</td></tr>
+<tr><td>How does this regulator behave with my output capacitors, not the datasheet's?</td><td>PDN (regulator fit)</td><td>fitted loop, Z<sub>out</sub>, droop</td></tr>
+<tr><td>Where on the planes does a resonance put its voltage?</td><td>PDN (Map)</td><td>V per A at a frequency, per layer</td></tr>
 </tbody></table>
 
 <h2 id="accuracy">Validation and accuracy</h2>
-<p>Every solver is checked against closed-form results in the test suite (<code>python3 -m pytest tests</code>, 127 tests).</p>
+<p>Every solver is checked against closed-form results in the test suite (<code>python3 -m pytest tests</code>, 149 tests).</p>
 <table>
 <thead><tr><th>Tool</th><th>Check</th><th>Agreement</th></tr></thead>
 <tbody>
@@ -1117,6 +1464,11 @@ Monte Carlo; adjust; BOM.</dd>
 <tr><td>1 mm trace over a 1.5 mm plane against the 2D field solve</td><td>3–6 % high (few bars across a narrow trace)</td></tr>
 <tr><td>Transient solver against an analytic RLC step; ring f and Q against the frequency analysis</td><td>&lt; 1 %; f within a few %, Q within 30 %</td></tr>
 <tr><td>Built-in transient against ngspice with the same equations</td><td>peaks within 1 %, energies within 10 %</td></tr>
+<tr><td rowspan="5">PDN</td><td>Plane pair C against ε₀ε<sub>r</sub>A/h; first cavity resonance against c / (2a√ε<sub>r</sub>)</td><td>within 5 %; within 5 %</td></tr>
+<tr><td>Low-frequency R against the regulator's R + the DC solver's copper R</td><td>within 5 %</td></tr>
+<tr><td>Rational (vector) fit of Z(f) used for the load steps</td><td>about 1 %; warned above 2 %</td></tr>
+<tr><td>Regulator loop fitted to synthetic steps (known truth, every control type), and to a converter's datasheet plot</td><td>parameters recovered; plot within 2 % rms</td></tr>
+<tr><td>Load-step explorer on this page against the tool's regulator solver</td><td>same dip to 0.1 mV</td></tr>
 <tr><td rowspan="2">Matching</td><td>50 → 10 Ω L-match, quarter-wave transformer, stubs, S2P = L</td><td>|Γ| &lt; 1e-9 at f₀; exact</td></tr>
 <tr><td>50 Ω microstrip on FR4 (h 1.6 mm, ε<sub>r</sub> 4.4)</td><td>3.0 mm width, as tables</td></tr>
 </tbody></table>
@@ -1145,7 +1497,7 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 <table>
 <thead><tr><th>File</th><th>What</th></tr></thead>
 <tbody>
-<tr><td><code>&lt;board&gt;.current_sim.json</code></td><td>Scenario: one section per tool (stackup overrides, DC rows/elements/settings, extract ports, loop cells and baselines, matching network). Next to the board; safe to commit.</td></tr>
+<tr><td><code>&lt;board&gt;.current_sim.json</code></td><td>Scenario: one section per tool (stackup overrides, the shared components, DC rows/settings, extract ports, loop cells and baselines, PDN rail / decaps / regulator model with its digitised points / loads, matching network). Next to the board; safe to commit.</td></tr>
 <tr><td><code>results/*.npz</code> + <code>.json</code></td><td>Saved DC results, reopened by the viewer and the results browser.</td></tr>
 <tr><td><code>~/.config/pcb_current_sim/library.json</code></td><td>Your component library parts.</td></tr>
 <tr><td><code>switch_models.json</code> (next to the library)</td><td>Switching Loop device models saved by part number.</td></tr>
@@ -1163,11 +1515,17 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 <details><summary>Results do not reflect my last edit</summary><p>The tools read the saved file: save, refill zones, then run (or use the window's save/refill buttons).</p></details>
 <details><summary>"Thermal runaway"</summary><p>The copper would exceed its melting point at this current: the result is real for the inputs. Check the current, the copper thickness and the ambient.</p></details>
 <details><summary>Switching Loop lowered the mesh cells</summary><p>The dense matrices must fit in 40 % of free memory; close other programs or accept the coarser mesh (adaptive meshing keeps most of the accuracy).</p></details>
+<details><summary>The regulator fit follows the datasheet loosely</summary>
+<ul><li>Look at the traces drawn over the image first: a colour pick that wandered onto the other trace, or a trace hidden under a label, spoils everything after it. "Edit as points" and correct by hand.</li>
+<li>Check the plot area corners, the scales per division and the test capacitance; try "Also fit the test capacitance".</li>
+<li>Try "Try every type and keep the best", and "Fit up to … after each edge" to leave out what follows the recovery.</li>
+<li>A light-load plot in burst / PFM mode (inductor current in bursts, output saw-toothing) is not a linear loop: use a heavier-load plot.</li></ul></details>
+<details><summary>PDN: "The mesh is coarser than λ/20 at f max"</summary><p>Plane resonances near f max read low. Raise "Mesh cells" or lower f max to what the target needs (0.35 / t<sub>rise</sub>).</p></details>
 <details><summary>ngspice not available</summary><p>Vendor SPICE models need KiCad's bundled libngspice or an <code>ngspice</code> program; otherwise use the built-in simulator with datasheet values.</p></details>
 
 <h2 id="planned">Planned tools</h2>
 <ul>
-  <li><b>PDN (AC power integrity)</b>: Z(f) of a rail at its loads against a target impedance, decoupling capacitor table with mounting inductance, VRM model, plane resonances, what-if per capacitor.</li>
+  <li><b>PDN, next step</b>: Touchstone export of the rail's impedance matrix, layout warnings (slots and splits under the rail, long capacitor-to-via traces), a store of fitted regulator models by part number, the line-transient (PSRR) plot.</li>
   <li><b>SI &amp; Fields</b>: 2D cross-section solver for coupled lines and crosstalk, return-current paths, HV field and clearance.</li>
   <li><b>3D extraction</b> (FastHenry / FastCap) and <b>full-wave</b> (openEMS) export.</li>
   <li><b>Batch command line</b>: rerun the setups saved for a board after every change (from a Makefile, on save, from a git hook or in CI), with pass / fail checks (temperature, voltage at a load, loop inductance, matching yield…) and a report comparing with the previous run.</li>
@@ -1175,19 +1533,28 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 
 <h2 id="glossary">Glossary</h2>
 <dl class="kv">
+<b>Anti-resonance</b><span>A peak of a rail's |Z| where two sources hand over: one capacitor's inductance against the next one's capacitance, or the regulator's loop against the output caps.</span>
 <b>C<sub>oss</sub>, C<sub>rss</sub>, C<sub>iss</sub></b><span>A MOSFET's output, reverse-transfer (Miller) and input capacitance from its datasheet.</span>
 <b>Commutation</b><span>The moment the current moves from one switch to the other.</span>
 <b>Common-source inductance</b><span>Inductance shared by the gate loop and the power loop; the power current's di/dt across it fights the gate drive.</span>
+<b>Crossover</b><span>The frequency where a regulator's loop gain falls to 1; above it the output capacitors carry the load step. About K / 2πC for PDN's loop model.</span>
 <b>Cut-cell</b><span>A grid where each link conducts through the actual copper part of the cell face, so tracks at any angle are handled.</span>
+<b>Decap</b><span>Decoupling capacitor: a capacitor from a rail to its return near a load.</span>
+<b>ESL, mounting L</b><span>A capacitor's own series inductance, and the inductance its pads, traces and vias add; together they set where the cap stops helping.</span>
 <b>Hot loop</b><span>The high-di/dt loop of a converter: hot-loop capacitor, both switches, return.</span>
 <b>Kelvin connection</b><span>A separate sense or drive connection that carries no load current.</span>
 <b>Kron reduction</b><span>Exact elimination of internal nodes of a network, keeping only the terminals.</span>
 <b>LISN</b><span>Line impedance stabilisation network: the 50 Ω measurement network in conducted EMI tests.</span>
+<b>PDN</b><span>Power distribution network: the regulator, planes, traces and capacitors that feed a rail to its chips.</span>
 <b>PEEC</b><span>Partial-element equivalent circuit: the copper as resistors and partial (self and mutual) inductances.</span>
+<b>PFM / burst mode</b><span>A converter's light-load mode that skips pulses; not a linear loop, so its load-transient plots fit poorly.</span>
 <b>Port</b><span>A pad that becomes a terminal of an extracted model, measured against the reference.</span>
 <b>Q</b><span>Quality factor: how many cycles a ring lasts (about Q/π periods to fall to 1/e).</span>
 <b>Return loss</b><span>−20·log₁₀|Γ|: how much of the power is reflected; 10 dB = 10 % reflected.</span>
 <b>Snubber</b><span>An R-C across a switch that damps its ringing.</span>
+<b>Target impedance</b><span>V × allowed deviation / ΔI: the most a rail's |Z| may reach up to 0.35 / t<sub>rise</sub> of the load step.</span>
+<b>Vector fitting</b><span>Fitting a sampled response with a sum of poles and residues, so its time response has a closed form.</span>
+<b>VRM</b><span>Voltage regulator module: the rail's regulator, seen from the board.</span>
 <b>Z₀</b><span>Characteristic impedance of a transmission line.</span>
 </dl>
 
@@ -1252,7 +1619,8 @@ function plot(cv, o){
   const X = o.x, Y = o.y;
   const tx = X.log ? function(v){ return L + (Math.log10(v) - Math.log10(X.min)) / (Math.log10(X.max) - Math.log10(X.min)) * pw; }
                    : function(v){ return L + (v - X.min) / (X.max - X.min) * pw; };
-  const ty = function(v){ return T + ph - (v - Y.min) / (Y.max - Y.min) * ph; };
+  const ty = Y.log ? function(v){ return T + ph - (Math.log10(Math.max(v, 1e-300)) - Math.log10(Y.min)) / (Math.log10(Y.max) - Math.log10(Y.min)) * ph; }
+                   : function(v){ return T + ph - (v - Y.min) / (Y.max - Y.min) * ph; };
   g.font = "11px system-ui,sans-serif"; g.lineWidth = 1;
   g.strokeStyle = css("--grid"); g.fillStyle = css("--ink2");
   // grid + ticks
@@ -1262,7 +1630,10 @@ function plot(cv, o){
   g.textAlign = "center";
   xt.forEach(function(v){ const x = tx(v); g.beginPath(); g.moveTo(x, T); g.lineTo(x, T + ph); g.stroke(); g.fillText((X.fmt || fmtNum)(v), x, T + ph + 14); });
   g.textAlign = "right";
-  niceTicks(Y.min, Y.max, 5).forEach(function(v){ const y = ty(v); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(fmtNum(v), L - 5, y + 4); });
+  let yt;
+  if (Y.log) { yt = []; for (let e = Math.floor(Math.log10(Y.min)); e <= Math.ceil(Math.log10(Y.max)); e++) { const v = Math.pow(10, e); if (v >= Y.min * 0.999 && v <= Y.max * 1.001) yt.push(v); } }
+  else yt = niceTicks(Y.min, Y.max, 5);
+  yt.forEach(function(v){ const y = ty(v); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(fmtNum(v), L - 5, y + 4); });
   g.textAlign = "center"; g.fillText(X.label || "", L + pw / 2, H - 6);
   g.save(); g.translate(13, T + ph / 2); g.rotate(-Math.PI / 2); g.fillText(Y.label || "", 0, 0); g.restore();
   g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
@@ -1277,7 +1648,8 @@ function plot(cv, o){
     for (let i = 0; i < s.x.length; i++) {
       const xv = s.x[i], yv = s.y[i];
       if (!isFinite(yv) || (X.log && xv <= 0)) { pen = false; continue; }
-      const x = tx(xv), y = ty(Math.max(Math.min(yv, Y.max + (Y.max - Y.min)), Y.min - (Y.max - Y.min)));
+      if (Y.log && yv <= 0) { pen = false; continue; }
+      const x = tx(xv), y = Math.max(Math.min(ty(yv), T + 2 * ph), T - ph);
       if (pen) g.lineTo(x, y); else { g.moveTo(x, y); pen = true; }
     }
     g.stroke(); g.setLineDash([]);
@@ -1494,6 +1866,97 @@ widget(["mR", "mX", "mLt", "mCt", "mLs", "mDi", "mS"], function(){
   const cols = xs.map(function(x){ return x >= spec ? css("--c1") : css("--c4"); });
   plot(document.getElementById("mplot"), {x: {min: 0, max: 40, label: "worst return loss in 2.400–2.4835 GHz [dB]"}, y: {min: 0, max: Math.max.apply(null, cnt) * 1.1 || 1, label: "builds"},
     series: [{x: xs, y: cnt, bars: true, w: bw, colors: cols, color: css("--c1")}], vlines: [{x: spec, color: css("--c3"), dash: []}]});
+});
+
+
+/* ---------- 6. PDN impedance explorer (lumped: regulator ∥ caps ∥ plane) ---------- */
+const ESR_SMALL = {"1e-8": 0.03, "1e-7": 0.03, "1e-6": 0.01, "4.7e-6": 0.005};
+function cinv(a){ const d = a[0] * a[0] + a[1] * a[1]; return [a[0] / d, -a[1] / d]; }
+function cmul(a, b){ return [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]]; }
+function localPeaks(f, z, upto){
+  const out = [];
+  for (let i = 1; i < z.length - 1; i++) if (f[i] <= upto && z[i] > z[i - 1] && z[i] >= z[i + 1]) out.push([z[i], f[i]]);
+  return out.sort(function(a, b){ return b[0] - a[0]; });
+}
+widget(["pV", "pD", "pI", "pT", "pReg", "pK", "pR", "pL", "pA", "pAC", "pB", "pBC", "pBP", "pM", "pP"], function(){
+  const V = val("pV"), dev = val("pD") / 100, dI = val("pI"), tr = Math.pow(10, val("pT")) * 1e-9, loop = val("pReg") === "loop";
+  const K = val("pK"), R = val("pR") * 1e-3, Lo = val("pL") * 1e-9;
+  const nA = val("pA"), CA = Math.pow(10, val("pAC")) * 1e-6, nB = val("pB"), CB = parseFloat(val("pBC"));
+  const lB = parseFloat(val("pBP")) * 1e-9, mB = val("pM") * 1e-9, Cp = val("pP") * 1e-9;
+  const rA = 0.005, lA = 1.8e-9, rB = ESR_SMALL[val("pBC")], wz = 2 * Math.PI * 10e3, wp = 2 * Math.PI * 200e3;
+  show("pV", V.toFixed(2) + " V"); show("pD", "± " + (dev * 100).toFixed(1) + " %"); show("pI", dI.toFixed(1) + " A"); show("pT", si(tr, "s"));
+  show("pK", K.toFixed(1) + " S"); show("pR", val("pR") + " mΩ"); show("pL", val("pL") + " nH");
+  show("pA", nA + " × " + si(CA, "F")); show("pAC", si(CA, "F")); show("pB", String(nB)); show("pM", val("pM").toFixed(2) + " nH"); show("pP", si(Cp, "F"));
+  document.getElementById("pK").disabled = !loop; document.getElementById("pR").disabled = loop; document.getElementById("pL").disabled = loop;
+  const zt = V * dev / dI, ft = 0.35 / tr;
+  const f = [], z = [], zc = [];
+  for (let k = 0; k <= 700; k++) {
+    const fq = Math.pow(10, 2 + 7 * k / 700), w = 2 * Math.PI * fq;
+    let Y = [w * Cp * 0.02, w * Cp];
+    if (nA) { const y = cinv([rA, w * lA - 1 / (w * CA)]); Y = [Y[0] + nA * y[0], Y[1] + nA * y[1]]; }
+    if (nB) { const y = cinv([rB, w * (lB + mB) - 1 / (w * CB)]); Y = [Y[0] + nB * y[0], Y[1] + nB * y[1]]; }
+    const yr = loop ? cmul([K, 0], cmul([wz, w], cinv([-w * w / wp, w]))) : cinv([R, w * Lo]);
+    f.push(fq); zc.push(1 / Math.hypot(Y[0], Y[1])); z.push(1 / Math.hypot(Y[0] + yr[0], Y[1] + yr[1]));
+  }
+  let wi = -1; for (let i = 0; i < f.length; i++) if (f[i] <= ft && (wi < 0 || z[i] > z[wi])) wi = i;
+  const pk = localPeaks(f, z, ft).slice(0, 3);
+  const ctot = nA * CA + nB * CB + Cp;
+  const ratio = z[wi] / zt;
+  outs("po", [["Target V·dev/ΔI", si(zt, "Ω")], ["Up to 0.35 / t_rise", si(ft, "Hz")],
+    ["Worst within the band", si(z[wi], "Ω") + " at " + si(f[wi], "Hz")], ["Verdict", ratio <= 1 ? "passes, " + Math.round(100 * (1 - ratio)) + " % margin" : "fails by " + Math.round(100 * (ratio - 1)) + " %"],
+    ["Peaks in the band", pk.length ? pk.map(function(p){ return si(p[0], "Ω") + " @ " + si(p[1], "Hz"); }).join(", ") : "none"],
+    [loop ? "Loop crossover K / 2πC" : "Regulator–caps resonance", loop ? si(K / (2 * Math.PI * ctot), "Hz") : si(1 / (2 * Math.PI * Math.sqrt(Lo * ctot)), "Hz")],
+    ["Small cap's resonance", nB ? si(1 / (2 * Math.PI * Math.sqrt((lB + mB) * CB)), "Hz") : "–"],
+    ["Total C", si(ctot, "F")]]);
+  const lo = Math.min(zt / 10, Math.min.apply(null, z) / 1.5), hi = Math.max(zt * 10, Math.min(Math.max.apply(null, z) * 1.5, 100));
+  plot(document.getElementById("pplot"), {x: {min: 100, max: 1e9, log: true, label: "frequency [Hz]"},
+    y: {min: Math.pow(10, Math.floor(Math.log10(lo))), max: Math.pow(10, Math.ceil(Math.log10(hi))), log: true, label: "|Z| [Ω]"},
+    series: [{x: f, y: zc, color: css("--mute"), width: 1.2}, {x: f, y: z, color: css("--c1"), width: 1.8},
+      {x: [100, ft], y: [zt, zt], color: css("--c4"), width: 1.6, dash: [6, 4]}],
+    vlines: [{x: ft, color: css("--c4")}], points: wi >= 0 ? [{x: f[wi], y: z[wi], color: ratio <= 1 ? css("--c3") : css("--c4")}] : []});
+});
+
+/* ---------- 7. load step on a fitted current-mode loop: datasheet C against the board's ---------- */
+function loadStep(K, fz, fp, C, esr, dI, tr, tEnd){
+  const wz = 2 * Math.PI * fz, wp = 2 * Math.PI * fp, t0 = tEnd * 0.06;
+  const lam = K / C + wp + wp * K * esr;                 // fastest rate, for an RK4 step well inside stability
+  const dt = Math.min(1.2 / lam, Math.max(tr / 8, tEnd / 20000));
+  const il = function(t){ return dI * Math.min(Math.max((t - t0) / tr, 0), 1); };
+  const der = function(t, x){            // x = [∫e, i_regulator, v_cap]; e = −v_out
+    const v = x[2] + esr * (x[1] - il(t)), e = -v;
+    return [[e, wp * (K * (e + wz * x[0]) - x[1]), (x[1] - il(t)) / C], v];
+  };
+  const n = Math.ceil(tEnd / dt), every = Math.max(1, Math.floor(n / 1500));
+  let x = [0, 0, 0];
+  const ts = [], vs = [];
+  for (let k = 0; k <= n; k++) {
+    const t = k * dt;
+    const a = der(t, x), b = der(t + dt / 2, x.map(function(q, j){ return q + dt / 2 * a[0][j]; }));
+    const c = der(t + dt / 2, x.map(function(q, j){ return q + dt / 2 * b[0][j]; })), d = der(t + dt, x.map(function(q, j){ return q + dt * c[0][j]; }));
+    if (k % every === 0) { ts.push(t - t0); vs.push(a[1]); }
+    x = x.map(function(q, j){ return q + dt / 6 * (a[0][j] + 2 * b[0][j] + 2 * c[0][j] + d[0][j]); });
+  }
+  let kmin = 0; for (let i = 0; i < vs.length; i++) if (vs[i] < vs[kmin]) kmin = i;
+  let last = 0; for (let i = 0; i < vs.length; i++) if (Math.abs(vs[i]) > 0.1 * Math.abs(vs[kmin])) last = i;
+  let over = 0; for (let i = kmin; i < vs.length; i++) over = Math.max(over, vs[i]);
+  return {t: ts, v: vs, dip: vs[kmin], tSettle: ts[last], over: over};
+}
+widget(["qK", "qZ", "qP", "qC0", "qC1", "qE", "qI", "qT"], function(){
+  const K = val("qK"), fz = val("qZ") * 1e3, fp = val("qP") * 1e3, C0 = val("qC0") * 1e-6, C1 = val("qC1") * 1e-6;
+  const esr = val("qE") * 1e-3, dI = val("qI"), tr = val("qT") * 1e-6;
+  show("qK", K.toFixed(1) + " S"); show("qZ", si(fz, "Hz")); show("qP", si(fp, "Hz")); show("qC0", si(C0, "F")); show("qC1", si(C1, "F"));
+  show("qE", val("qE") + " mΩ"); show("qI", dI.toFixed(1) + " A"); show("qT", si(tr, "s"));
+  const fc0 = K / (2 * Math.PI * C0), fc1 = K / (2 * Math.PI * C1);
+  const tEnd = Math.min(Math.max(150e-6, 6 / (2 * Math.PI * Math.min(fz, fc0, fc1)), 20 * tr), 3e-3) * 1.06;
+  const a = loadStep(K, fz, fp, C0, esr, dI, tr, tEnd), b = loadStep(K, fz, fp, C1, esr, dI, tr, tEnd);
+  const mv = function(v){ return (v * 1e3).toFixed(1) + " mV"; };
+  outs("qo", [["Crossover: datasheet → yours", si(fc0, "Hz") + " → " + si(fc1, "Hz")], ["Dip: datasheet C", mv(a.dip)], ["Dip: your C", mv(b.dip)],
+    ["Back within 10 %", si(a.tSettle, "s") + " → " + si(b.tSettle, "s")], ["Overshoot after", mv(a.over) + " → " + mv(b.over)]]);
+  const lo = Math.min(a.dip, b.dip) * 1.15e3, hi = Math.max(a.over, b.over, -0.15 * lo / 1e3) * 1.3e3 + 1;
+  plot(document.getElementById("qplot"), {x: {min: a.t[0] * 1e6, max: a.t[a.t.length - 1] * 1e6, label: "time after the step [µs]"}, y: {min: lo, max: hi, label: "ΔV [mV]"},
+    series: [{x: a.t.map(function(t){ return t * 1e6; }), y: a.v.map(function(v){ return v * 1e3; }), color: css("--mute"), width: 1.4},
+      {x: b.t.map(function(t){ return t * 1e6; }), y: b.v.map(function(v){ return v * 1e3; }), color: css("--c1"), width: 1.8}],
+    hlines: [{y: 0, color: css("--line"), dash: []}]});
 });
 
 applyTheme();

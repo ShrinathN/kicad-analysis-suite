@@ -64,6 +64,11 @@ def open_window(session, key, parent=None):
             return wx.MessageBox("Load a board first.", "Switching Loop", parent=parent)
         from .loop import LoopFrame
         w = LoopFrame(session)
+    elif key == "pdn":
+        if session.board is None:
+            return wx.MessageBox("Load a board first.", "PDN", parent=parent)
+        from .pdn import PdnFrame
+        w = PdnFrame(session)
     elif key == "stackup":
         if session.stackup is None:
             return wx.MessageBox("Load a board first.", "Stackup", parent=parent)
