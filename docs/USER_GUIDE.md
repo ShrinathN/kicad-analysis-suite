@@ -4,7 +4,7 @@ The full reference for the PCB Analysis Suite: installation, every tool and opti
 
 ## Overview
 
-The suite currently has two tools: **DC & Thermal** and **Matching & Tolerance** (see [Suite](#suite)). The DC & Thermal tool runs a DC simulation of copper nets in a `.kicad_pcb`. For each simulated net it produces:
+The suite has five tools: **DC & Thermal**, **Switching Loop**, **PDN (AC)**, **Trace R/L/C → SPICE** and **Matching & Tolerance** (see [Suite](#suite)). Any of their setups can be kept as a test and rerun from the command line with pass / fail checks and a report (see [Simulation tests](#simulation-tests-command-line)). The DC & Thermal tool runs a DC simulation of copper nets in a `.kicad_pcb`. For each simulated net it produces:
 - current density |J|
 - voltage (IR drop), with current paths, loads and voltage sources
 - Joule power density
@@ -200,6 +200,190 @@ All windows run in one process and share the loaded board, the stackup and the c
 
 **Scenario file.** `<board>.current_sim.json` (version 2) has one section per tool: `stackup`, `components`, `dc`, `matching`, `extract`, `loop` and `pdn`.
 Each tool rewrites only its own section. Version-1 files load as the `dc` section, and their copper-thickness overrides move to `stackup`.
+
+## Simulation tests (command line)
+
+Set a simulation up once in its window, keep it as a **test**, and rerun it whenever the board changes, from the command line, a Makefile, a script or the Tests window. Each run checks the results against pass / fail limits, writes a report, and compares with the previous run.
+
+**The tests file.** `<board>.simtests.toml`, next to the board (TOML: plain text, comments with `#`). One `[[test]]` per simulation, any number per tool (DC at 3 A and at 5 A, PDN for two rails, every switching cell):
+
+```toml
+board = "Magnus_Gateway.kicad_pcb"        # relative to this file
+
+[[test]]
+name = "3V3 rail"
+tool = "pdn"                               # dc | pdn | loop | extract | matching
+note = "decoupling of the MCU rail"        # optional, shown in the report
+outputs = ["csv", "touchstone"]            # files to keep; none unless listed
+
+[[test.check]]
+what = "z_ratio"                           # a result value (tables below)
+max = 1.0                                  # min and / or max; neither: only recorded
+
+[[test.check]]
+what = "droop_mV"
+at = "U1"                                  # one item of a per-item value; without 'at' every item must pass
+max = 120
+
+[test.setup]                               # every parameter, as the window saves it
+rail = ["+3V3"]
+...
+
+[shared]                                   # at the end: used by every test
+[shared.stackup]                           # copper thickness and dielectric overrides
+[[shared.components]]                      # the parts between pads (resistors, elements, regulators, C, L)
+```
+
+A test is self-contained: it does not read what the windows currently have, so it means the same thing until the file is edited. A test can carry its own `[test.stackup]` / `[[test.components]]` instead of the shared ones. `enabled = false` leaves a test out of `--all`.
+
+**Making tests.**
+- In a tool window: **Save as test…** (next to Run / Analyse / Extract) stores the window's current setup under a name; saving under an existing name replaces its setup and keeps its checks and outputs.
+- From the setups the windows have saved: `python3 -m pcb_current_sim init BOARD.kicad_pcb [--tools dc,pdn]` adds a test per saved setup (each Switching Loop cell is one).
+- By hand: copy a test and change its setup (another current, another rail).
+
+**The Tests window** (Home → Simulation tests): the file's tests with their last result; rename, duplicate, switch on / off, delete; "Update from its tool" takes the tool window's current setup into the selected test. For the selected test: its checks (Add / Edit: pick the value from a list with its unit and meaning, the item from the last run's items, min / max), the files to keep, and its last result. "Run selected" / "Run all" run in the window; "Open report" / "Open folder" show the last run; the box under them is the same run as a command line.
+
+**Running.**
+
+```sh
+python3 -m pcb_current_sim run BOARD.simtests.toml --test "3V3 rail" --test "Loop*"   # named tests (shell patterns allowed)
+python3 -m pcb_current_sim run BOARD.simtests.toml --all                              # every test that is on
+python3 -m pcb_current_sim run BOARD.simtests.toml --all --report-only                # always exit 0
+python3 -m pcb_current_sim list    BOARD.simtests.toml        # tests, checks, outputs
+python3 -m pcb_current_sim check   BOARD.simtests.toml        # validate without simulating
+python3 -m pcb_current_sim metrics [TOOL]                     # result values and outputs per tool
+```
+
+Only named tests run: `run` without `--test` or `--all` does nothing. Exit code: 0 every check passes (or `--report-only`), 1 a check failed, 2 a test could not run (a pad that no longer exists, an open circuit, an unknown value name): a test that cannot run is reported as an error with the reason, never as a pass. `pip install -e .` in the repository also installs the command as `kicad-suite` (`kicad-suite run …`). Needs Python 3.11 or newer (the TOML reader is in the standard library from 3.11).
+
+**Results.** Each run makes `simulations/<date_time>/` in the project folder (the board's folder):
+- `report.html` / `report.md`: pass / fail per test and check (the deciding value, which item it was, the previous run's value), the key numbers in words, warnings, the plots it wrote, links to the files;
+- `results.json`: every value of every test and each check's result, for scripts;
+- `tests.toml`: the tests file as it ran (the run can be repeated exactly); `log.txt`;
+- a folder per test with the outputs it lists.
+The report compares with the newest earlier run in `simulations/`: checked values side by side, and every single-number value that moved by more than 1 %.
+
+**In a Makefile** (the KiCad Flatpak's Python has numpy and wx; the host Python needs numpy, scipy and matplotlib):
+
+```make
+sim:
+	python3 -m pcb_current_sim run board.simtests.toml --all
+```
+
+`make sim` stops on a failed check (exit code 1). Results use the zone fills saved in the board file: refill zones and save in KiCad before running.
+
+**Result values** (`python3 -m pcb_current_sim metrics` prints the same):
+
+**DC & Thermal** (`tool = "dc"`)
+
+| Value | Unit | Per | Meaning |
+|---|---|---|---|
+| `T_max_C` | °C |  | hottest copper temperature (thermal on) |
+| `runaway` |  |  | 1 if the electro-thermal loop ran away (copper heating without limit), else 0 |
+| `P_copper_W` | W |  | power dissipated in the copper |
+| `P_elements_W` | W |  | power dissipated in the parts between pads |
+| `J_max` | A/mm² |  | highest current density, over all nets |
+| `net_J_max` | A/mm² | net | highest current density of a net |
+| `net_P_W` | W | net | power dissipated in a net's copper |
+| `row_I_A` | A | row | current of an excitation |
+| `row_dV_mV` | mV | row | voltage between an excitation's source and sink pads |
+| `row_R_mOhm` | mΩ | row | resistance of a current-path excitation |
+| `row_err_pct` | % | row | grid-error estimate of an excitation's result |
+| `loop_L_nH` | nH | row | loop inductance of an excitation (magnetic on) |
+| `pad_V` | V | pad | voltage at a pad (as the window's Pads table: against each net's sink) |
+| `pad_T_C` | °C | pad | temperature at a pad (thermal on) |
+| `el_I_A` | A | part | current through a part between pads |
+| `el_P_W` | W | part | power in a part between pads |
+| `el_util` |  | part | a part's power / its rating (1 = at the rating) |
+| `el_T_C` | °C | part | temperature at a part's pads |
+| `reg_V_in` | V | regulator | a regulator's input voltage at its pins |
+| `reg_V_out` | V | regulator | a regulator's output voltage at its pins |
+| `reg_headroom_V` | V | regulator | an LDO's input - output voltage |
+| `reg_dropout` |  | regulator | 1 if an LDO is in dropout, else 0 |
+| `reg_P_W` | W | regulator | a regulator's loss |
+| `reg_T_j_C` | °C | regulator | a regulator's estimated junction temperature |
+| `ipc_util_10_max` |  |  | worst track current / its IPC-2221 10 °C rise current |
+| `ipc_util_20_max` |  |  | worst track current / its IPC-2221 20 °C rise current |
+| `t_fuse_min_s` | s |  | shortest time for a track to fuse at these currents (Onderdonk) |
+| `via_util_max` |  |  | worst via current / its 10 °C rise capacity |
+| `pulse_T_max_C` | °C |  | hottest temperature during the pulse (pulse on) |
+
+Outputs: `png` (every map as PNG (each quantity and layer)); `svg` (every map as SVG); `pdf` (multi-page PDF report: maps and tables); `csv` (the result tables as CSV); `html` (interactive HTML map page); `html3d` (interactive 3D HTML page (plotly inline)); `vtk` (ParaView files (paraview/board.vtm)); `npz` (the result itself (result.npz), to open in the DC viewer).
+
+**PDN (AC)** (`tool = "pdn"`)
+
+| Value | Unit | Per | Meaning |
+|---|---|---|---|
+| `z_ratio` |  | load | worst |Z| / the target impedance, up to the target's frequency (<= 1 passes) |
+| `z_worst_mOhm` | mΩ | load | worst |Z| within the target's band |
+| `z_target_mOhm` | mΩ |  | the target impedance (V × deviation / ΔI) |
+| `droop_mV` | mV | load | deepest dip of the rail at a load during the load steps |
+| `rise_mV` | mV | load | highest rise of the rail at a load during the load steps |
+| `step_ratio` |  | load | largest |ΔV| during the load steps / the allowed deviation (<= 1 passes) |
+| `decap_srf_MHz` | MHz | decap | a decap's series resonance with its mounting |
+| `decap_mount_nH` | nH | decap | a decap's return-side mounting inductance |
+| `decap_dist_mm` | mm | decap | a decap's distance to the nearest load |
+| `layout_warnings` |  |  | number of layout findings marked as warnings (Layout tab) |
+| `peak_mOhm` | mΩ | load | highest |Z| at a load over the whole sweep (incl. plane resonances) |
+
+Outputs: `csv` (impedance.csv (|Z| per load: complete, + decaps, board alone), decaps.csv, layout.csv, steps.csv); `png` (impedance.png per load and steps.png); `touchstone` (the complete rail between the loads (.sNp, 50 Ω)); `touchstone_board` (the bare board with a port at every load, decap and the regulator (.sNp, 50 Ω)).
+
+**Switching Loop** (`tool = "loop"`)
+
+| Value | Unit | Per | Meaning |
+|---|---|---|---|
+| `loop_L_nH` | nH |  | hot-loop inductance (copper + parts) of the hard-switched commutation |
+| `loop_L_board_nH` | nH |  | the copper's share of the hot-loop inductance |
+| `loop_R_mOhm` | mΩ |  | hot-loop resistance at the ringing frequency |
+| `ring_MHz` | MHz |  | switch-node ringing frequency (frequency analysis) |
+| `ring_Q` |  |  | ringing Q (frequency analysis; with the snubbers) |
+| `V_over_est` | V |  | estimated overshoot L × di/dt at the given inductor current |
+| `loop_area_mm2` | mm² |  | hot loop's effective magnetic area (radiated EMI) |
+| `commutation_L_nH` | nH | commutation | hot-loop L of each commutation ('<parts> off') |
+| `gate_L_nH` | nH | fet | gate-loop inductance of a FET |
+| `L_cs_nH` | nH | fet | common-source inductance of a FET (shared by gate and power loops) |
+| `gate_Q` |  | fet | gate-loop ringing Q of a FET |
+| `overshoot_V` | V |  | highest switch overshoot above the rail in the simulated edges |
+| `V_peak_V` | V | edge | peak voltage across the blocking switch |
+| `dvdt_V_ns` | V/ns | edge | switch-node dv/dt (10-90 %) |
+| `didt_A_ns` | A/ns | edge | highest di/dt in the loop |
+| `E_uJ` | µJ | edge | switching energy of an edge |
+| `P_sw_W` | W |  | switching loss (E_on + E_off) × f_sw |
+| `gate_margin_V` | V |  | smallest V_th − peak gate voltage of the off FET during the edges (< 0: it turns on: shoot-through risk) |
+| `rad_margin_dB` | dB |  | radiated EMI estimate: worst margin below the limit (negative = over) |
+| `cond_margin_dB` | dB |  | conducted common-mode EMI estimate: worst margin below the limit |
+
+Outputs: `csv` (commutations.csv (L, breakdown, ringing), gates.csv, edges.csv (switching waveforms, when simulated)); `png` (impedance.png (across the switch) and edges.png (switching waveforms)); `spice` (loop.lib: coupled-inductor model of the cell's copper).
+
+**Trace R/L/C → SPICE** (`tool = "extract"`)
+
+| Value | Unit | Per | Meaning |
+|---|---|---|---|
+| `R_mOhm` | mΩ | port | resistance from P1 to a port (key: the port's pad, e.g. J2.1) |
+| `L_nH` | nH | port | loop inductance from P1 to a port |
+| `C_pF` | pF | port | copper capacitance to the return, P1 to a port |
+| `delay_ps` | ps | port | propagation delay from P1 to a port |
+| `Z0_ohm` | Ω | port | average characteristic impedance from P1 to a port |
+| `Z0_min_ohm` | Ω | port | lowest section Z0 on the path to a port |
+| `Z0_max_ohm` | Ω | port | highest section Z0 on the path to a port |
+| `C_total_pF` | pF |  | all copper capacitance to the return |
+| `impedance_steps` |  |  | number of Z0 steps above 10 % along the path |
+
+Outputs: `spice` (<NET>.lib: the SPICE subcircuit (plain R, L, C)); `csv` (pairs.csv (totals per port), segments.csv, vias.csv, pads.csv).
+
+**Matching & Tolerance** (`tool = "matching"`)
+
+| Value | Unit | Per | Meaning |
+|---|---|---|---|
+| `yield_pct` | % |  | Monte Carlo yield: samples meeting every band's specs |
+| `yield_corners_pct` | % |  | share of the tolerance corners meeting every band's specs |
+| `band_yield_pct` | % | band | Monte Carlo yield of one band |
+| `rl_nominal_dB` | dB | band | nominal worst return loss in a band (higher is better) |
+| `il_nominal_dB` | dB | band | nominal worst insertion loss in a band (lower is better) |
+| `rl_worst_dB` | dB | band | worst-case return loss in a band over the tolerances (worst-case search) |
+| `il_worst_dB` | dB | band | worst-case insertion loss in a band over the tolerances |
+
+Outputs: `csv` (response.csv: nominal RL, IL, VSWR per frequency (+ Monte Carlo 5 / 50 / 95 % when run)); `png` (response.png: RL and IL against frequency with the bands).
 
 ## Model
 - **Excitations.** Every row of the table is applied **at the same time**. A row is one of:

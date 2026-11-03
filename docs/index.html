@@ -134,6 +134,7 @@ svg.flow .sm{font-size:11px; fill:var(--ink2)}
     <li><a href="#match">Matching &amp; Tolerance</a>
       <ol><li><a href="#match-how">How it works</a></li><li><a href="#match-use">Using it</a></li><li><a href="#match-mc">Tolerance explorer</a></li><li><a href="#match-limits">Limits</a></li><li><a href="#match-cases">Use cases</a></li></ol></li>
     <li><a href="#shared">Components, stackup, library</a></li>
+    <li><a href="#tests">Simulation tests (command line)</a></li>
     <li class="grp">Reference</li>
     <li><a href="#choose">Which tool for which question</a></li>
     <li><a href="#accuracy">Validation and accuracy</a></li>
@@ -1442,6 +1443,72 @@ Monte Carlo; adjust; BOM.</dd>
   be started after <code>flatpak override --user --talk-name=org.freedesktop.Flatpak org.kicad.KiCad</code>.</li>
 </ul>
 
+<h2 id="tests">Simulation tests (command line)</h2>
+<p class="lead">Set a simulation up once in its window, keep it as a <b>test</b> with pass / fail limits, and rerun it
+whenever the board changes: from the command line, a Makefile, a script or the Tests window. Each run writes a report and
+compares it with the previous run.</p>
+<figure><img src="screenshots/tests_window.png" alt="Tests window: tests, checks with their last values, files to keep, last result" loading="lazy">
+<figcaption>The Tests window: a DC test with three checks (two failing) and a matching test; the run as a command line under the buttons.</figcaption></figure>
+<h3 id="tests-file">The tests file</h3>
+<p><code>&lt;board&gt;.simtests.toml</code> next to the board, plain text (TOML). One <code>[[test]]</code> per simulation,
+any number per tool. A test holds <em>every</em> parameter of its simulation (<code>[test.setup]</code>, as the tool's
+window saves it), its checks and the files to keep; the stackup overrides and the parts between pads that all tests use
+are in <code>[shared]</code> at the end. A test never reads what the windows currently have, so it means the same thing
+until the file is edited.</p>
+<pre><code>board = "board.kicad_pcb"
+
+[[test]]
+name = "3V3 rail"
+tool = "pdn"                      # dc | pdn | loop | extract | matching
+outputs = ["csv", "touchstone"]   # files to keep; none unless listed
+
+[[test.check]]
+what = "z_ratio"                  # worst |Z| / target, every load
+max = 1.0
+
+[[test.check]]
+what = "droop_mV"
+at = "U1"                         # one item; without 'at' every item must pass
+max = 120
+
+[test.setup]
+rail = ["+3V3"]
+…</code></pre>
+<h3 id="tests-make">Making tests</h3>
+<ul>
+  <li><b>Save as test…</b> in any tool window (next to Run / Analyse / Extract): the window's setup under a name. Saving
+  under an existing name replaces the setup and keeps its checks and outputs.</li>
+  <li><code>python3 -m pcb_current_sim init board.kicad_pcb</code>: a test for every setup the windows have saved for the board.</li>
+  <li><b>The Tests window</b> (Home → Simulation tests): checks (pick the value from a list with its unit and meaning,
+  the item from the last run, min / max), files to keep, on / off, duplicate, rename, "Update from its tool"; run the
+  selected tests or all, open the report or the run folder.</li>
+</ul>
+<h3 id="tests-run">Running and results</h3>
+<pre><code>python3 -m pcb_current_sim run board.simtests.toml --test "3V3 rail" --test "Loop*"
+python3 -m pcb_current_sim run board.simtests.toml --all [--report-only]
+python3 -m pcb_current_sim list | check board.simtests.toml
+python3 -m pcb_current_sim metrics [dc|pdn|loop|extract|matching]   # what a check can use</code></pre>
+<p>Only the named tests run. Exit code 0 when every check passes (always with <code>--report-only</code>), 1 when a check
+fails, 2 when a test could not run: a pad that is gone, an open circuit or an unknown value name is an <em>error</em> with
+its reason, never a pass. Every run makes <code>simulations/&lt;date_time&gt;/</code> in the project folder:
+<code>report.html</code> and <code>report.md</code> (pass / fail per check with the deciding item, the previous run's
+value, the key numbers, warnings, plots), <code>results.json</code> (every value, for scripts), the tests file as it ran,
+a log and a folder per test with its outputs. A Makefile target is one line:
+<code>python3 -m pcb_current_sim run board.simtests.toml --all</code>; <code>make</code> stops on a failed check. Refill
+zones and save in KiCad first: the tests read the saved board.</p>
+<figure><img src="screenshots/tests_report.png" alt="report.html of a run" loading="lazy">
+<figcaption>report.html: the verdict, a table of the tests, then each test's checks against the previous run.</figcaption></figure>
+<p>The result values per tool (all of them in the user guide, or <code>metrics</code>):</p>
+<table>
+<thead><tr><th>Tool</th><th>Examples</th></tr></thead>
+<tbody>
+<tr><td>DC &amp; Thermal</td><td><code>T_max_C</code>, <code>pad_V</code> / <code>pad_T_C</code> per pad, <code>el_util</code> per part (power / rating), <code>reg_T_j_C</code> per regulator, <code>row_dV_mV</code>, <code>net_J_max</code>, <code>ipc_util_10_max</code>, <code>t_fuse_min_s</code>, <code>runaway</code></td></tr>
+<tr><td>PDN</td><td><code>z_ratio</code> and <code>droop_mV</code> per load, <code>step_ratio</code>, <code>decap_mount_nH</code> per decap, <code>layout_warnings</code></td></tr>
+<tr><td>Switching Loop</td><td><code>loop_L_nH</code>, <code>ring_MHz</code>, <code>overshoot_V</code>, <code>gate_margin_V</code>, <code>L_cs_nH</code> per FET, <code>P_sw_W</code>, <code>rad_margin_dB</code></td></tr>
+<tr><td>Trace R/L/C</td><td><code>R_mOhm</code>, <code>L_nH</code>, <code>Z0_ohm</code>, <code>delay_ps</code> per port, <code>impedance_steps</code></td></tr>
+<tr><td>Matching</td><td><code>yield_pct</code>, <code>rl_nominal_dB</code> / <code>rl_worst_dB</code> per band, <code>band_yield_pct</code></td></tr>
+</tbody></table>
+
 <h2 id="choose">Which tool for which question</h2>
 <table>
 <thead><tr><th>Question</th><th>Tool</th><th>Main output</th></tr></thead>
@@ -1510,6 +1577,10 @@ python3 -m pcb_current_sim board.kicad_pcb --row "J1.2&gt;J2.2:3:signal" --row "
 # Trace R/L/C -&gt; SPICE
 python3 -m pcb_current_sim.extract board.kicad_pcb U1.12 J3.1 [more pads] --return GND --fmax 1G -o trace.lib
 
+# Simulation tests (see "Simulation tests")
+python3 -m pcb_current_sim run board.simtests.toml --test NAME | --all [--report-only]
+python3 -m pcb_current_sim init board.kicad_pcb        # tests from the windows' saved setups
+
 # Standalone GUI (no KiCad needed)
 python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 
@@ -1521,6 +1592,9 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 <tr><td><code>results/*.npz</code> + <code>.json</code></td><td>Saved DC results, reopened by the viewer and the results browser.</td></tr>
 <tr><td><code>~/.config/pcb_current_sim/library.json</code></td><td>Your component library parts.</td></tr>
 <tr><td><code>switch_models.json</code> (next to the library)</td><td>Switching Loop device models saved by part number.</td></tr>
+<tr><td><code>regulator_models.json</code> (next to the library)</td><td>PDN regulator fits saved by part number.</td></tr>
+<tr><td><code>&lt;board&gt;.simtests.toml</code></td><td>Simulation tests: every parameter, the checks and outputs of each test. Next to the board; safe to commit.</td></tr>
+<tr><td><code>simulations/&lt;date_time&gt;/</code></td><td>One folder per test run: report.html / .md, results.json, the tests file as it ran, log, outputs per test.</td></tr>
 <tr><td>Exports</td><td>PNG/SVG/PDF views and reports, CSV tables, interactive HTML, ParaView folders (<code>board.vtm</code>, <code>pulse.pvd</code>), SPICE <code>.lib</code>, Touchstone inputs.</td></tr>
 </tbody></table>
 
@@ -1548,7 +1622,6 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
   <li><b>PDN, next step</b>: the line-transient (PSRR) plot, the regulator's remote-sense point.</li>
   <li><b>SI &amp; Fields</b>: 2D cross-section solver for coupled lines and crosstalk, return-current paths, HV field and clearance.</li>
   <li><b>3D extraction</b> (FastHenry / FastCap) and <b>full-wave</b> (openEMS) export.</li>
-  <li><b>Batch command line</b>: rerun the setups saved for a board after every change (from a Makefile, on save, from a git hook or in CI), with pass / fail checks (temperature, voltage at a load, loop inductance, matching yield…) and a report comparing with the previous run.</li>
 </ul>
 
 <h2 id="glossary">Glossary</h2>

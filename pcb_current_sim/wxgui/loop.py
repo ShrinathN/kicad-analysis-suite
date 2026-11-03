@@ -1077,6 +1077,8 @@ class LoopFrame(wx.Frame):
         self.run_b = wx.Button(left, label="Analyse")
         self.run_b.Bind(wx.EVT_BUTTON, lambda e: self._run())
         ls.Add(self.run_b, 0, wx.EXPAND | wx.ALL, 6)
+        from .tests import add_button
+        ls.Add(add_button(left, self, self.test_setup), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         self.reload_b = wx.Button(left, label="Save in KiCad, reload and analyse" if self.session.kicad is not None
                                   else "Reload the board file and analyse")
         self.reload_b.SetToolTip("After changing the layout: " + ("save the board in KiCad, " if self.session.kicad
@@ -1831,6 +1833,14 @@ class LoopFrame(wx.Frame):
         in_use = {k for g in s.drives for k in g.chain}
         s.devices = [d for d in s.devices if not (d.role == "gate_r" and d.key in gone and d.key not in in_use)]
         self._to_ui()
+
+    def test_setup(self):
+        if not self._from_ui():
+            return None
+        self.save()
+        d = self.setup.to_dict()
+        d.pop("baseline", None)
+        return "loop", d, f"Loop {self._cell_name(self.setup)}"
 
     def _run(self):
         if self._running or not self._from_ui():

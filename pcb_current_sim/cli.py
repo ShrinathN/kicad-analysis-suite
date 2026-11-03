@@ -25,6 +25,9 @@ from . import solver as S
 UNITS = {"um": 1e-6, "µm": 1e-6, "mm": 1e-3, "oz": 34.79e-6, "mil": 25.4e-6}
 
 
+BATCH_COMMANDS = ("run", "init", "list", "check", "metrics")
+
+
 def parse_row(text, k, kind="I"):
     m = re.fullmatch(r"\s*([^>]+)>([^:]+):([-+0-9.eE]+)(?::(.+))?\s*", text)
     if not m:
@@ -63,6 +66,10 @@ def parse_thickness(text):
 
 
 def main(argv=None):
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args and args[0] in BATCH_COMMANDS:
+        from .batch.cli import main as batch_main
+        sys.exit(batch_main(args))
     ap = argparse.ArgumentParser(prog="pcb_current_sim", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("board")

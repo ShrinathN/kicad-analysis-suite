@@ -8,6 +8,13 @@
 - **Trace R/L/C → SPICE**: R, L, C, Z₀ and delay of the copper between any pads, from a 2D field solve of each cross-section, exported as a SPICE RLC subcircuit.
 - **Matching & Tolerance**: draw an RF matching network with real parts, then see whether it still meets its specs across part tolerances.
 
+**Simulation tests**: keep any tool's setup as a test with pass / fail checks (T_max < 85 °C, the rail within its target, loop L < 3 nH, …) and rerun them whenever the board changes, from the command line, a Makefile or a script. Each run writes a report to `simulations/<timestamp>/` and compares it with the previous run:
+
+```sh
+python3 -m pcb_current_sim init board.kicad_pcb                       # tests from the setups you made in the windows
+python3 -m pcb_current_sim run board.simtests.toml --test "3V3 rail"   # or --all; exit code 1 when a check fails
+```
+
 More tools (3D extraction, full-wave export, signal integrity) are planned. See the [roadmap](docs/ROADMAP.md).
 
 ![Home window](docs/screenshots/home.png)

@@ -358,6 +358,8 @@ class ExtractFrame(wx.Frame):
         self.run_b = wx.Button(left, label="Extract")
         self.run_b.Bind(wx.EVT_BUTTON, lambda e: self._run())
         ls.Add(self.run_b, 0, wx.EXPAND | wx.ALL, 6)
+        from .tests import add_button
+        ls.Add(add_button(left, self, self.test_setup), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         ls.Add(wx.StaticText(left, label=(
             "R from the copper geometry (DC field solution); L and C from a 2D\n"
             "field solve of each cross-section against the return copper\n"
@@ -632,6 +634,16 @@ class ExtractFrame(wx.Frame):
             wx.MessageBox(f"KiCad: {e}", "KiCad", parent=self)
 
     # ------------------------------------------------------------- run
+    def test_setup(self):
+        if len(self.ports) < 2:
+            wx.MessageBox("Add at least two pads.", "Save as test", parent=self)
+            return None
+        if not self._from_ui():
+            return None
+        self.save()
+        return ("extract", dict(ports=list(self.ports), return_nets=self._checked_nets(), options=asdict(self.opts)),
+                f"Trace {self.ports[0]} → {self.ports[-1]}")
+
     def _run(self):
         if self._running:
             return

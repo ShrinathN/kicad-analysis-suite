@@ -10,12 +10,12 @@ The suite is being built in this order. The plan below was worked out with the c
 | – | Switching Loop: extraction, switching transient, EMI and design aids; buck, boost, half-bridge and 4-switch buck-boost cells | done |
 | – | DC & Thermal: linear and switching regulators | done |
 | 3 | PDN (AC power integrity), including regulator load-step behaviour | done (impedance, decaps, regulator fit, load steps, Touchstone export, layout checks, saved regulator fits); later: line transient (PSRR), remote sense |
-| – | Batch command line: rerun the saved setups after every board change, with pass / fail checks and a report (design discussed, see below) | planned |
+| – | Simulation tests: a tests file per board (every parameter of each simulation, pass / fail checks, outputs), run from the command line, a Makefile, a script or the Tests window; reports in simulations/<timestamp>/ with comparison to the previous run | done |
 | 4 | 3D extraction (FastHenry / FastCap) | planned |
 | 5 | Full-wave export (openEMS) | planned |
 | 6 | SI & Fields | planned |
 
-## Batch command line (discussed 2026-11-01, not built)
+## Batch command line (discussed 2026-11-01; built 2026-11-04 as Simulation tests, see the user guide)
 - `python3 -m pcb_current_sim run BOARD.kicad_pcb` reruns every setup saved in the board's scenario file (the GUI is where you set them up), headless.
 - Pass / fail checks saved with the setups (T_max, voltage at a load, regulator T_j, loop L, overshoot, matching yield), printed as a table; a failure gives a non-zero exit code.
 - Each run writes a report, the tables and a comparison with the previous run, e.g. under the project's `Build/<timestamp>/Simulation/`.

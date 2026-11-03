@@ -41,7 +41,7 @@ VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.s
 python3 -m pytest tests
 ```
 
-About 153 tests in about 115 s:
+About 159 tests in about 120 s:
 - `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results; regulators (LDO, dropout, switching, junction estimate), heat at parts, row values with SI prefixes.
 - `tests/test_loop.py`: Switching Loop: PEEC against analytic inductances, detection (buck, boost ICs, rail links, Kelvin sources, gate chains, 4-switch buck-boost), topologies and the operating point from the converter, transients against analytic RLC and ngspice, snubber, EMI spectrum, losses.
 - `tests/test_suite.py`: stackup parsing and the εr(f) model, scenario migration, the session, the component library and external tool detection.
@@ -50,6 +50,7 @@ About 153 tests in about 115 s:
 - `tests/test_components.py`: the shared component list: migration of the old per-tool lists, per-tool switches, saving, the DC file API, Switching Loop capacitor models, the Components window's operations.
 - `tests/test_pdn.py`: PDN: detection of the rail's parts, a plane pair's C and first cavity resonance, a decap's series resonance, low-f R against the DC solver, the target check, decap table, what-if and maps, Touchstone export (read back; the bare-board file with the parts connected gives the analysed Z), layout checks (a slot in the return plane crossed by the current, copper with no return, a far decap, mounting L), saved regulator fits by part number.
 - `tests/test_regulator.py`: the regulator loop model (droop, crossover), fits recovering known loops from noisy synthetic plots, the boost RHP zero, digitising a synthetic scope image, a fit from a few dozen hand-clicked points (`digitise.from_points`), a ringing recovery found by the auto type, a fitted test capacitance, the fit window, hue colour matching and RDP simplification.
+- `tests/test_batch.py`: simulation tests: TOML round trip, tests-file errors, check evaluation (worst item, `at`, missing values), a run of a matching and a DC test (exit codes, files, report, results.json, comparison with the previous run, `--test` patterns), tests that cannot run, `init` / `list` / `check` / `metrics`.
 - `tests/test_pdn_transient.py`: vector fitting, ramp responses against a time simulation, PULSE edges, superposition of several loads.
 - `tests/test_matching.py`: the matching network maths (L-match, transformers, stubs, microstrip, Touchstone, S2P) and the tolerance analyses.
 
@@ -105,6 +106,14 @@ pcb_current_sim/
     spice.py                .subckt writer (plain R, L, C)
     __main__.py             command line
   pdn/                      PDN core: model.py (setup, detection), network.py (mesh over an ideal return, Z(f) sweep), analysis.py (target, decaps, what-if, maps), regulator.py (loop model and fit), digitise.py (traces from a plot image), transient.py (load steps: vector fitting, ramp responses, PULSE loads), layout.py (layout checks), regstore.py (saved regulator fits)
+  batch/                    simulation tests (tests file, runner, report, command line)
+    tomlio.py               TOML writer (reader: tomllib); None <-> "null"
+    spec.py                 the tests file: TestFile ([shared] stackup + components), Test, Check
+    make.py                 tests from saved scenario sections or a window's setup
+    runner.py               select, run, evaluate checks, simulations/<timestamp>/, compare with the previous run
+    report.py               report.html / report.md
+    cli.py                  run / init / list / check / metrics (dispatched from pcb_current_sim/cli.py)
+    tools/                  one adapter per tool: METRICS, OUTPUTS, from_scenario, run(ctx)
   loop/                     Switching Loop core
     peec.py                 mesh (cells, bars, wires, barrels), partial L, mesh-current solve, capacitance
     circuit.py              small complex nodal solver: copper block + parts, port Z matrices, resonance
@@ -114,7 +123,7 @@ pcb_current_sim/
     model.py                elements, ports, bands, ABCD cascade
     analysis.py             corners, Monte Carlo, worst case, sensitivity, BOM
     microstrip.py           Hammerstad-Jensen microstrip with loss
-    touchstone.py           .s1p / .s2p reader, S -> ABCD
+    touchstone.py           .sNp reader and writer, S -> ABCD
     plots.py                matplotlib figures (Smith, S11, S21, VSWR, histograms, tornado)
   wxgui/                    wx GUI (used inside KiCad)
     suite.py                Home, Suite menu, stackup / library / results / external windows
@@ -125,6 +134,7 @@ pcb_current_sim/
     loop.py                 Switching Loop window
     pdn.py                  PDN window
     regfit.py               regulator model from a datasheet plot (digitiser + fit)
+    tests.py                Tests window, "Save as test…" (add_button / save_as_test), check editor
     schematic.py            symbol canvas for the matching editor
     layout.py               scrolled() input panels and refit() after their texts change
   gui/                      Tk GUI (DC & Thermal only, for hosts without wx)

@@ -366,6 +366,8 @@ class PdnFrame(wx.Frame):
                               "first if you changed it)")
         self.run_b.Bind(wx.EVT_BUTTON, lambda e: self._run())
         ls.Add(self.run_b, 0, wx.EXPAND | wx.ALL, 8)
+        from .tests import add_button
+        ls.Add(add_button(left, self, self.test_setup), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         left.SetSizer(ls)
 
         # results
@@ -824,6 +826,15 @@ class PdnFrame(wx.Frame):
         self._to_ui()
 
     # ------------------------------------------------------------- run
+    def test_setup(self):
+        if not self._from_ui():
+            return None
+        if not self.setup.rail or not self.setup.returns:
+            wx.MessageBox("Pick the rail and its return nets first.", "Save as test", parent=self)
+            return None
+        self.save()
+        return "pdn", self.setup.to_dict(), f"PDN {'+'.join(self.setup.rail)}"
+
     def _run(self):
         if self._running or not self._from_ui():
             return

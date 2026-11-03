@@ -71,13 +71,19 @@ def save_scenario(path, rows, settings, elements=None):
     save_section(path, "dc", dict(rows=[asdict(r) for r in rows], settings=s), **more)
 
 
+def dc_from_dict(dc, stackup=None):
+    """Rows and Settings from a DC section ({rows, settings}) and the stackup section (copper thickness)."""
+    known_r = {f.name for f in fields(Row)}
+    rows = [Row(**{k: v for k, v in r.items() if k in known_r}) for r in dc.get("rows", [])]
+    known = {f.name for f in fields(Settings)}
+    s = Settings(**{k: v for k, v in (dc.get("settings") or {}).items() if k in known})
+    s.thickness = dict((stackup or {}).get("cu_thickness") or s.thickness)
+    return rows, s
+
+
 def load_scenario(path):
     d = read(path)
-    dc = d.get("dc") or {}
-    rows = [Row(**r) for r in dc.get("rows", [])]
-    known = {f.name for f in fields(Settings)}
-    s = Settings(**{k: v for k, v in dc.get("settings", {}).items() if k in known})
-    s.thickness = dict((d.get("stackup") or {}).get("cu_thickness") or s.thickness)
+    rows, s = dc_from_dict(d.get("dc") or {}, d.get("stackup"))
     from . import components as CO
     els = [replace(e, enabled=CO.used(e, "dc")) for e in CO.migrate(d)]
     return rows, s, els

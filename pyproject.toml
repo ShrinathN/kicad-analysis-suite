@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kicad-analysis-suite"
+version = "0.1.0"
+description = "PCB Analysis Suite: DC & thermal, PDN, switching loop, trace R/L/C and matching analyses of KiCad boards"
+readme = "README.md"
+license = { text = "GPL-3.0-only" }
+requires-python = ">=3.11"
+dependencies = ["numpy", "scipy", "matplotlib"]
+
+[project.optional-dependencies]
+gui = ["wxPython"]
+kicad = ["kicad-python>=0.3.0"]
+html = ["plotly"]
+
+[project.scripts]
+# kicad-suite run BOARD.simtests.toml --test NAME  (the same as python3 -m pcb_current_sim ...)
+kicad-suite = "pcb_current_sim.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ShrinathN/kicad-analysis-suite"
+
+[tool.setuptools.packages.find]
+include = ["pcb_current_sim*"]

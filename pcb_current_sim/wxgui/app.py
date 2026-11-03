@@ -725,7 +725,9 @@ class MainFrame(wx.Frame):
         b3.Bind(wx.EVT_BUTTON, lambda e: self._show())
         b4.Bind(wx.EVT_BUTTON, lambda e: self._open_result())
         self.status = wx.StaticText(p, label="")
-        rrow.AddMany([(self.run_btn,), (b3, 0, wx.LEFT, 4), (b4, 0, wx.LEFT, 4),
+        from .tests import add_button
+        b5 = add_button(p, self, self.test_setup)
+        rrow.AddMany([(self.run_btn,), (b3, 0, wx.LEFT, 4), (b4, 0, wx.LEFT, 4), (b5, 0, wx.LEFT, 4),
                       (self.status, 1, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 12)])
         top.Add(rrow, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
         p.SetSizer(top)
@@ -1100,6 +1102,19 @@ class MainFrame(wx.Frame):
         return True
 
     # ------------------------------------------------------------- run
+    def test_setup(self):
+        """(tool, setup, name) of the current setup for a simulation test (None: not ready, said why)."""
+        if not self.board or not self.rows:
+            wx.MessageBox("Load a board and add at least one excitation.", "Save as test", parent=self)
+            return None
+        if not self._ui_to_settings():
+            return None
+        from dataclasses import asdict as _asd
+        s = _asd(self.settings)
+        s.pop("thickness", None)
+        self.session.share("dc", self.elements)
+        return "dc", {"rows": [_asd(r) for r in self.rows], "settings": s}, "DC & Thermal"
+
     def _run(self):
         if not self.board or not self.rows:
             return wx.MessageBox("Load a board and add at least one excitation.", "Run", parent=self)

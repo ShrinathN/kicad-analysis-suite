@@ -25,6 +25,8 @@ SHARED = (("stackup", "Stackup & materials…", "Copper, dielectric thickness, �
           ("components", "Components…", "This board's parts between pads, shared by the tools, and which tool "
                                         "uses each"),
           ("library", "Component library…", "Real-part models: L, C, R with tolerance, Q, SRF, ESR, ESL"),
+          ("tests", "Simulation tests…", "Tests run from the command line or here: pass / fail checks, outputs, "
+                                         "reports in simulations/"),
           ("results", "Results browser…", "Saved results of every tool"),
           ("external", "External tools…", "openEMS, FastHenry, FastCap, ParaView; Flatpak sandbox access"))
 
@@ -78,6 +80,11 @@ def open_window(session, key, parent=None):
             return wx.MessageBox("Load a board first.", "Components", parent=parent)
         from .components import ComponentsFrame
         w = ComponentsFrame(session)
+    elif key == "tests":
+        if session.board is None:
+            return wx.MessageBox("Load a board first.", "Simulation tests", parent=parent)
+        from .tests import TestsFrame
+        w = TestsFrame(session)
     elif key == "library":
         w = LibraryFrame(session)
     elif key == "results":
@@ -173,12 +180,15 @@ class HomeFrame(wx.Frame):
             groups.Add(gb, 1, wx.EXPAND | wx.RIGHT, 6)
         top.Add(groups, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        sb = wx.StaticBoxSizer(wx.HORIZONTAL, p, "Shared")
+        sb = wx.StaticBoxSizer(wx.VERTICAL, p, "Shared")
         ss = sb.GetStaticBox()
+        grid = wx.GridSizer(0, 3, 0, 0)            # rows of three, so the window stays as wide as the tool groups
         for key, label, help_ in SHARED:
-            b = wx.adv.CommandLinkButton(ss, mainLabel=_amp(label.rstrip("…")), note=_note(help_, 30))
+            b = wx.adv.CommandLinkButton(ss, mainLabel=_amp(label.rstrip("…")), note=_note(help_, 40))
+            b.SetToolTip(help_)
             b.Bind(wx.EVT_BUTTON, lambda e, k=key: open_window(self.session, k, self))
-            sb.Add(b, 1, wx.EXPAND | wx.ALL, 4)
+            grid.Add(b, 1, wx.EXPAND | wx.ALL, 4)
+        sb.Add(grid, 1, wx.EXPAND)
         top.Add(sb, 0, wx.EXPAND | wx.ALL, 8)
         p.SetSizer(top)
         best = p.GetBestSize()

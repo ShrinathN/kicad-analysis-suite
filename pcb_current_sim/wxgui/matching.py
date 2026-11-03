@@ -388,7 +388,8 @@ class MatchingFrame(wx.Frame):
         self.stop_btn = wx.Button(pnl, label="Cancel")
         self.stop_btn.Bind(wx.EVT_BUTTON, lambda e: setattr(self, "_cancel", True))
         self.stop_btn.Disable()
-        row.AddMany([(self.run_btn,), (self.stop_btn, 0, wx.LEFT, 4)])
+        from .tests import add_button
+        row.AddMany([(self.run_btn,), (self.stop_btn, 0, wx.LEFT, 4), (add_button(pnl, self, self.test_setup), 0, wx.LEFT, 4)])
         s.Add(row, 0, wx.ALL, 6)
         self.vars_lbl = wx.StaticText(pnl, label="")
         s.Add(self.vars_lbl, 0, wx.LEFT | wx.RIGHT, 6)
@@ -880,6 +881,21 @@ class MatchingFrame(wx.Frame):
         self._changed()
 
     # ------------------------------------------------------------- analysis
+    def test_setup(self):
+        s = self.setup
+        s.mc_n, s.seed = self.mc_n.GetValue(), self.seed.GetValue()
+        s.dist = "gauss" if self.dist.GetSelection() == 1 else "uniform"
+        s.temp = self.temp.GetValue()
+        try:
+            s.T_min, s.T_max = float(self.tmin.GetValue()), float(self.tmax.GetValue())
+        except ValueError:
+            wx.MessageBox("Temperatures must be numbers.", "Save as test", parent=self)
+            return None
+        self.save(quiet=True)
+        flags = {k: c.GetValue() for k, c in self.chk.items()}
+        an = {"corners": flags["corners"], "mc": flags["mc"], "worst": flags["worst"], "sensitivity": flags["sens"]}
+        return "matching", dict(s.to_dict(), analyses=an), "Matching network"
+
     def _run(self):
         if self._running:
             return
