@@ -80,16 +80,22 @@ class Network:
     h: np.ndarray                # m, per node: height over the return (parallel of both sides)
     pitch: float                 # mm
     warnings: list = field(default_factory=list)
+    area: np.ndarray = None      # m², per node: copper area of its cells (0 for track nodes)
+    no_ret: np.ndarray = None    # per node: no return copper above or below
 
     @property
     def n_nodes(self):
         return len(self.C)
 
-    def y_mesh(self, f):
+    def y_branch(self, f):
         w = 2 * math.pi * f
         R = self.r_dc * np.where(np.isfinite(self.t_skin), PE.skin_factor(f, np.where(np.isfinite(self.t_skin),
                                                                                   self.t_skin, 1.0)), 1.0)
-        yb = 1.0 / (R + 1j * w * self.L)
+        return 1.0 / (R + 1j * w * self.L)
+
+    def y_mesh(self, f):
+        w = 2 * math.pi * f
+        yb = self.y_branch(f)
         Y = (self.inc.T @ sp.diags(yb) @ self.inc).tocsc()
         return Y + sp.diags(w * self.C * (self.tand + 1j) + GMIN)
 
@@ -203,7 +209,7 @@ def build(board, stackup, s, progress=lambda m: None):
     t_skin = np.where(kind == 2, np.inf, mesh.br_t)
     inc = sp.coo_matrix((np.r_[np.ones(B), -np.ones(B)], (np.r_[np.arange(B), np.arange(B)], np.r_[a, b])),
                         shape=(B, N)).tocsr()
-    net = Network(mesh, dict(mesh.terminals), inc, mesh.br_R.copy(), t_skin, L, C, tand, h, pitch, warnings)
+    net = Network(mesh, dict(mesh.terminals), inc, mesh.br_R.copy(), t_skin, L, C, tand, h, pitch, warnings, A, none)
     return net
 
 
@@ -274,13 +280,22 @@ class Sweep:
     l_ret: dict = field(default_factory=dict)    # decap ref -> (L, how)
 
 
-def sweep(net, board, stackup, s, f=None, decaps=None, vrm=True, progress=lambda m: None, l_ret=None, direction=1):
-    """Z(f) between the loads with the given decaps (default: the enabled ones) and the VRM."""
+def sweep(net, board, stackup, s, f=None, decaps=None, vrm=True, progress=lambda m: None, l_ret=None, direction=1,
+          ports=None):
+    """Z(f) between the loads with the given decaps (default: the enabled ones) and the VRM.
+    ports: terminal names ('L:<load>', 'C:<ref>', 'V') to take Z between instead of the loads;
+    Sweep.loads then holds those names."""
     f = np.logspace(math.log10(s.f_min), math.log10(s.f_max), s.n_f) if f is None else np.asarray(f, float)
-    loads = [ld.name for ld in s.loads if ld.enabled and f"L:{ld.name}" in net.terms]
-    if not loads:
-        raise ValueError("No load on the rail: add a load (the IC's power pins).")
-    ld_nodes = [net.terms[f"L:{n}"] for n in loads]
+    if ports is None:
+        loads = [ld.name for ld in s.loads if ld.enabled and f"L:{ld.name}" in net.terms]
+        if not loads:
+            raise ValueError("No load on the rail: add a load (the IC's power pins).")
+        ld_nodes = [net.terms[f"L:{n}"] for n in loads]
+    else:
+        missing = [p for p in ports if p not in net.terms]
+        if missing:
+            raise ValueError(f"No rail copper at {', '.join(missing)}.")
+        loads, ld_nodes = list(ports), [net.terms[p] for p in ports]
     caps = [d for d in s.decaps if (d.enabled if decaps is None else d.ref in decaps) and f"C:{d.ref}" in net.terms]
     if l_ret is None:
         l_ret = {d.ref: decap_l_ret(board, stackup, s, d) for d in caps}

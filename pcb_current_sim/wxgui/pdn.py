@@ -17,6 +17,7 @@ from .. import elements as EL  # noqa: E402
 from .. import scenario as SC  # noqa: E402
 from ..pdn import analysis as PA  # noqa: E402
 from ..pdn import model as PM  # noqa: E402
+from ..pdn import regstore as RS  # noqa: E402
 from ..suite.library import Part, fmt_si, parse_si, part_from_dict  # noqa: E402
 from .crossprobe import CrossProbe, selected_rows  # noqa: E402
 from .layout import AutoList, refit, scrolled  # noqa: E402
@@ -80,6 +81,48 @@ class PulseDialog(wx.Dialog):
         self.EndModal(wx.ID_OK)
 
 
+class TouchstoneDialog(wx.Dialog):
+    """What to export and the reference impedance."""
+
+    def __init__(self, parent):
+        super().__init__(parent, title="Save as Touchstone")
+        s = wx.BoxSizer(wx.VERTICAL)
+        self.kind = wx.RadioBox(parent=self, label="Ports", choices=list(PA.EXPORTS.values()),
+                                majorDimension=1, style=wx.RA_SPECIFY_COLS)
+        self.kind.SetToolTip("Loads: Z between the loads as analysed, decaps and the regulator inside. Board only: "
+                             "the bare copper (no parts), with a port at every load, every decap (also those "
+                             "switched off) and the regulator output, to connect your own models there")
+        s.Add(self.kind, 0, wx.EXPAND | wx.ALL, 8)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.z0c = wx.TextCtrl(self, value="50", size=(80, -1))
+        self.z0c.SetToolTip("Reference impedance of every port [Ω]. 50 Ω reads in any tool; PI tools often use "
+                            "1 Ω or 0.1 Ω so milliohm impedances are not crowded near S11 = −1 (the numbers are "
+                            "written with 13 digits, so either is exact)")
+        row.AddMany([(wx.StaticText(self, label="Reference impedance [Ω]"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6),
+                     (self.z0c,)])
+        s.Add(row, 0, wx.ALL, 8)
+        s.Add(wx.StaticText(self, label="S-parameters, real/imaginary, Touchstone v1; port names in the file's "
+                                        "comments. Ports are against the return net (ideal reference)."),
+              0, wx.ALL, 8)
+        s.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
+        self.SetSizerAndFit(s)
+        self.Bind(wx.EVT_BUTTON, self._ok, id=wx.ID_OK)
+        self.z0 = 50.0
+
+    def what(self):
+        return list(PA.EXPORTS)[self.kind.GetSelection()]
+
+    def _ok(self, e):
+        try:
+            self.z0 = parse_si(self.z0c.GetValue().replace("Ω", "").replace("ohm", "").strip())
+            if not self.z0 > 0:
+                raise ValueError
+        except Exception:       # noqa: BLE001
+            return wx.MessageBox("The reference impedance must be a positive number (e.g. 50, 1, 100m).",
+                                 "Touchstone", parent=self)
+        self.EndModal(wx.ID_OK)
+
+
 def _num(text, unit=""):
     t = text.strip()
     if unit and t.endswith(unit):
@@ -92,6 +135,7 @@ class PdnFrame(wx.Frame):
         super().__init__(None, title="PDN (AC) - PCB analysis suite", size=(1500, 960))
         self.session, self.board = session, session.board
         self.res, self.whatif, self._running = None, None, False
+        self.mark = None            # (x, y) mm marked on the map (a layout issue)
         self.setup = self._load()
         self._build()
         attach_suite_menu(self, session, "pdn")
@@ -99,6 +143,8 @@ class PdnFrame(wx.Frame):
         self.probe.watch(self.dlist, lambda lc: [self.setup.decaps[k].ref for k in self._dsel()])
         self.probe.watch(self.llist, lambda lc: [self.setup.loads[i].name for i in selected_rows(lc)
                                                  if i < len(self.setup.loads)])
+        self.probe.watch(self.ltab, lambda lc: [r for i in selected_rows(lc) if self.res is not None
+                                                and i < len(self.res.layout) for r in self.res.layout[i].refs])
         session.listen(self._on_session)
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self._to_ui()
@@ -115,9 +161,11 @@ class PdnFrame(wx.Frame):
             except (TypeError, ValueError):
                 pass
         try:
-            return PM.detect(self.board, None, self.session.components)
+            s = PM.detect(self.board, None, self.session.components)
         except ValueError:
             return PM.Setup()
+        RS.apply(self.board, s, RS.load(RS.path_for(self.session.library.path)))
+        return s
 
     def save(self):
         if self.session.scenario_path:
@@ -214,6 +262,21 @@ class PdnFrame(wx.Frame):
         vb.Add(b, 0, wx.ALL, 4)
         self.vmodel = wx.StaticText(vbox, label="")
         vb.Add(self.vmodel, 0, wx.ALL, 4)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.vsaved = wx.Choice(vbox, size=(170, -1))
+        self.vsaved.SetToolTip("Regulator fits saved by part number (from any board): pick one to use it here. "
+                               "Parts on this board next to the rail are listed first, with their reference")
+        self.vsaved.Bind(wx.EVT_CHOICE, lambda e: self._use_saved())
+        b1 = wx.Button(vbox, label="Save fit…", style=wx.BU_EXACTFIT)
+        b1.SetToolTip("Keep this rail's fitted loop under the regulator's part number, for other boards and rails: "
+                      "a board with that part (its footprint's Value) then gets the fit automatically")
+        b1.Bind(wx.EVT_BUTTON, lambda e: self._save_fit())
+        b2 = wx.Button(vbox, label="Forget", style=wx.BU_EXACTFIT)
+        b2.SetToolTip("Remove the selected saved fit from the store (this rail keeps the loop it has)")
+        b2.Bind(wx.EVT_BUTTON, lambda e: self._forget_fit())
+        row.AddMany([(wx.StaticText(vbox, label="Saved fits"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6),
+                     (self.vsaved, 0, wx.RIGHT, 6), (b1, 0, wx.RIGHT, 4), (b2,)])
+        vb.Add(row, 0, wx.ALL, 4)
         g = wx.FlexGridSizer(0, 2, 4, 6)
         self.vf = {}
         for key, label, unit, tip in VRM_F:
@@ -317,8 +380,13 @@ class PdnFrame(wx.Frame):
         self.loadc.SetToolTip("The load whose impedance is plotted")
         self.loadc.Bind(wx.EVT_CHOICE, lambda e: self._plot_z())
         self.zinfo = wx.StaticText(p, label="")
+        b = wx.Button(p, label="Touchstone…", style=wx.BU_EXACTFIT)
+        b.SetToolTip("Save the rail's impedance as an S-parameter file (.sNp) for a circuit simulator or another "
+                     "PI tool: between the loads with every part included, or the bare board with a port at "
+                     "each load, decap and the regulator")
+        b.Bind(wx.EVT_BUTTON, lambda e: self._touchstone())
         row.AddMany([(wx.StaticText(p, label="Load"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6),
-                     (self.loadc, 0, wx.RIGHT, 12), (self.zinfo, 1, wx.ALIGN_CENTER_VERTICAL)])
+                     (self.loadc, 0, wx.RIGHT, 8), (b, 0, wx.RIGHT, 12), (self.zinfo, 1, wx.ALIGN_CENTER_VERTICAL)])
         s.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self.zfig = Figure(figsize=(8, 5), constrained_layout=True)
         self.zcanvas = FigureCanvasWxAgg(p, -1, self.zfig)
@@ -394,6 +462,27 @@ class PdnFrame(wx.Frame):
         s.Add(NavigationToolbar2WxAgg(self.mcanvas), 0, wx.EXPAND)
         p.SetSizer(s)
         self.nb.AddPage(p, "Map")
+        # layout checks
+        p = wx.Panel(self.nb)
+        s = wx.BoxSizer(wx.VERTICAL)
+        self.ltab = AutoList(p, style=wx.LC_REPORT, stretch=2)
+        for k, t in enumerate(("", "What", "Details", "Where [mm]")):
+            self.ltab.InsertColumn(k, t, width=90)
+        self.ltab.SetToolTip("Select a line to highlight its part in KiCad; double-click one with a place to "
+                             "mark it on the Map")
+        self.ltab.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._layout_go(e.GetIndex()))
+        s.Add(self.ltab, 1, wx.EXPAND | wx.ALL, 6)
+        self.ltext = wx.TextCtrl(p, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 70))
+        self.ltab.Bind(wx.EVT_LIST_ITEM_SELECTED, lambda e: self.ltext.SetValue(
+            self.res.layout[e.GetIndex()].text if self.res and e.GetIndex() < len(self.res.layout) else ""))
+        s.Add(self.ltext, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
+        s.Add(wx.StaticText(p, label="What in the layout raises the rail's impedance: copper without return under "
+                                     "it and voids or slots in the return (ranked by how much inductance they add, "
+                                     "with 1 A at each load and every part connected), decaps with long return "
+                                     "paths, loads with no decap close by. Which decaps could go: What if."),
+              0, wx.ALL, 6)
+        p.SetSizer(s)
+        self.nb.AddPage(p, "Layout")
         # summary
         self.summary = wx.TextCtrl(self.nb, style=wx.TE_MULTILINE | wx.TE_READONLY)
         self.nb.AddPage(self.summary, "Summary")
@@ -473,7 +562,74 @@ class PdnFrame(wx.Frame):
             self.vmodel.Wrap(420)
         else:
             self.vmodel.SetLabel("")
+        self._fill_saved()
         refit(self.left)
+
+    def _store(self):
+        return RS.path_for(self.session.library.path)
+
+    def _fill_saved(self):
+        models = RS.load(self._store())
+        near = {k: ref for k, ref in reversed(RS.on_board(self.board, self.setup, models))}
+        keys = sorted(near, key=lambda k: near[k]) + sorted((k for k in models if k not in near), key=str.lower)
+        self._saved_keys = keys
+        self.vsaved.Set(["—"] + [f"{k} ({near[k]})" if k in near else k for k in keys])
+        cur = (self.setup.vrm.model or {}).get("part", "")
+        k = next((i for i, n in enumerate(keys) if n.lower() == cur.lower()), -1)
+        self.vsaved.SetSelection(k + 1)
+
+    def _use_saved(self):
+        k = self.vsaved.GetSelection() - 1
+        if k < 0:
+            return
+        key = self._saved_keys[k]
+        m = RS.find(RS.load(self._store()), key)
+        if m is None:
+            return
+        self.setup.vrm.model = dict(m)
+        self.setup.vrm.kind = "loop"
+        self.res = None
+        self.vkind.SetSelection(1)
+        self._vkind()
+        self.save()
+        self._status(f"The regulator is now {key}'s saved fit: Analyse again.")
+
+    def _save_fit(self):
+        v = self.setup.vrm
+        if not v.model:
+            return wx.MessageBox("No fitted loop to save: use 'Fit from the datasheet plot…' first.", "Save fit",
+                                 parent=self)
+        fp = next((f for f in self.board.footprints if f.ref == v.ref), None)
+        default = v.model.get("part") or (fp.value if fp and not v.ref.startswith("L") else "")
+        with wx.TextEntryDialog(self, "Part number (as in the footprint's Value field):", "Save fit",
+                                default) as d:
+            if d.ShowModal() != wx.ID_OK:
+                return
+            key = d.GetValue().strip()
+        if not key:
+            return
+        path = self._store()
+        if RS.find(RS.load(path), key) is not None and wx.MessageBox(
+                f"Replace the saved fit of {key}?", "Save fit", wx.YES_NO, parent=self) != wx.YES:
+            return
+        RS.save(path, key, {**v.model, "part": key})
+        v.model = {**v.model, "part": key}
+        self.save()
+        self._vkind()
+        self._fill_saved()
+        self._status(f"Saved the fit as {key} in {path}.")
+
+    def _forget_fit(self):
+        k = self.vsaved.GetSelection() - 1
+        if k < 0:
+            return
+        key = self._saved_keys[k]
+        if wx.MessageBox(f"Remove the saved fit of {key} from the store?", "Forget", wx.YES_NO,
+                         parent=self) != wx.YES:
+            return
+        RS.remove(self._store(), key)
+        self._fill_saved()
+        self._status(f"Removed {key}'s saved fit (this rail keeps its loop).")
 
     def _regfit(self):
         from .regfit import RegFitFrame
@@ -543,10 +699,13 @@ class PdnFrame(wx.Frame):
         new.target = old.target if keep else new.target
         for key in ("f_min", "f_max", "n_f", "cells", "pitch", "margin", "T"):
             setattr(new, key, getattr(old, key))
+        if keep and new.vrm.ref == old.vrm.ref and old.vrm.model:
+            new.vrm.model, new.vrm.kind = old.vrm.model, old.vrm.kind
+        used = RS.apply(self.board, new, RS.load(self._store()))
         self.setup, self.res, self.whatif = new, None, None
         self._to_ui()
         self._status(f"{len(new.decaps)} decaps, {len(new.loads)} loads on {new.rail[0]}; regulator: "
-                     f"{new.vrm.ref or 'not found'}.")
+                     f"{new.vrm.ref or 'not found'}" + (f", with {used}'s saved fit." if used else "."))
 
     def _dsel(self):
         return [i for i in selected_rows(self.dlist) if i < len(self.setup.decaps)]
@@ -721,6 +880,11 @@ class PdnFrame(wx.Frame):
         self.mapf.Set([fmt_si(f, "Hz") for f in pk])
         if pk:
             self.mapf.SetSelection(0)
+        self.ltab.DeleteAllItems()
+        for i in r.layout:
+            self.ltab.Append(["⚠" if i.level == "warn" else "ⓘ", i.kind, i.text,
+                              f"{i.at[0]:.1f}, {i.at[1]:.1f}" if i.at else ""])
+        self.mark = None
         self.summary.SetValue(self._summary())
 
     def _summary(self):
@@ -743,6 +907,9 @@ class PdnFrame(wx.Frame):
                 out.append(f"{'✔' if c['ok'] else '✖'} {c['load']}: dips {fmt_si(-c['dip'], 'V')}, rises "
                            f"{fmt_si(c['peak'], 'V')} (allowed ± {fmt_si(c['allowed'], 'V')}); the worst moment, at "
                            f"{fmt_si(c['t_worst'], 's')}, is {100 * c['share']:.0f} % caused by {c['worst_from']}'s step.")
+        warn = [i for i in r.layout if i.level == "warn"]
+        if warn:
+            out += ["", f"Layout ({len(warn)}, see the Layout tab):"] + [f"⚠ {i.text}" for i in warn[:8]]
         out.append("")
         for name, pk in r.peaks.items():
             if pk:
@@ -846,6 +1013,41 @@ class PdnFrame(wx.Frame):
                     fh.write(",".join(f"{v[k]:.6g}" for _, v in cols) + "\n")
             self._status(f"Saved {d.GetPath()}")
 
+    def _touchstone(self):
+        if self.res is None or self._running:
+            return wx.MessageBox("Analyse first.", "Touchstone", parent=self)
+        d = TouchstoneDialog(self)
+        if d.ShowModal() != wx.ID_OK:
+            return d.Destroy()
+        what, z0 = d.what(), d.z0
+        d.Destroy()
+        n = len(self.res.loads) if what == "loads" else None
+        ext = f"s{n}p" if n else "snp"
+        with wx.FileDialog(self, "Save the rail's impedance", wildcard=f"Touchstone (*.{ext})|*.{ext}",
+                           defaultFile=f"{'_'.join(self.res_setup.rail)}_{what}.{ext}",
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fd:
+            if fd.ShowModal() != wx.ID_OK:
+                return
+            path = fd.GetPath()
+        self._running = True
+        board, st, s, r = self.board, self.session.stackup, self.res_setup, self.res
+
+        def work():
+            try:
+                out = PA.touchstone(board, st, s, r, path, what, z0,
+                                    progress=lambda m: wx.CallAfter(self._status, m))
+                wx.CallAfter(self._touchstone_done, out, None)
+            except Exception:       # noqa: BLE001
+                wx.CallAfter(self._touchstone_done, None, traceback.format_exc())
+        threading.Thread(target=work, daemon=True).start()
+
+    def _touchstone_done(self, out, err):
+        self._running = False
+        if err:
+            return wx.MessageBox(err, "Touchstone", parent=self)
+        path, names = out
+        self._status(f"Saved {path}: {len(names)} port{'s' * (len(names) != 1)} ({', '.join(names)})")
+
     def _what_if(self):
         if self.res is None or self._running:
             return wx.MessageBox("Analyse first.", "What if", parent=self)
@@ -872,6 +1074,17 @@ class PdnFrame(wx.Frame):
         self._status("What-if done: capacitors whose removal barely changes |Z| (×1.0x) and keeps the target are "
                      "candidates to drop.")
 
+    def _layout_go(self, k):
+        if self.res is None or k >= len(self.res.layout) or self.res.layout[k].at is None:
+            return
+        self.mark = self.res.layout[k].at
+        if not self.mapf.GetValue():
+            self.mapf.SetValue(fmt_si(self.res.f_target, "Hz"))
+        for q in range(self.nb.GetPageCount()):
+            if self.nb.GetPageText(q) == "Map":
+                self.nb.SetSelection(q)
+        self._map()
+
     def _map(self):
         if self.res is None:
             return wx.MessageBox("Analyse first.", "Map", parent=self)
@@ -895,6 +1108,9 @@ class PdnFrame(wx.Frame):
             ax.set_aspect("equal")
             ax.invert_yaxis()
             ax.tick_params(labelsize=7)
+        if self.mark is not None:
+            for ax in fig.axes:
+                ax.plot(*self.mark, "o", ms=16, mfc="none", mec="cyan", mew=2)
         fig.colorbar(sc, ax=fig.axes, label="|V| per 1 A at the load [mV]", shrink=0.8)
         fig.suptitle(f"{self.res.loads[j]} at {fmt_si(f, 'Hz')}", fontsize=10)
         self.mcanvas.draw()

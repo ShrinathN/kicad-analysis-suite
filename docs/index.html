@@ -946,6 +946,8 @@ FETs (see <a href="#uc-dc-fet">DC use case 7</a>).</dd>
 rail's impedance Z(f) as each chip sees it, from the board's copper, the decoupling capacitors and the regulator, compares it
 with the target impedance, and shows the rail's voltage over time while the loads step. The regulator can be its real
 control loop, fitted to the load-transient plot in its datasheet.</p>
+<figure><img src="screenshots/pdn_impedance.png" alt="PDN window: rail setup on the left, impedance at a load against the target on the right" loading="lazy">
+<figcaption>The +3V3 rail of a 4-layer board: |Z| at U1 for the board alone, with the decaps and complete, against the 165 mΩ target.</figcaption></figure>
 
 <h3 id="pdn-how">How it works</h3>
 <p>A chip draws its current in steps (a core waking up, a burst of I/O, a radio transmitting). The step has to come from
@@ -1012,13 +1014,30 @@ one's capacitance, or between the regulator's loop and the output capacitors. Th
   in turn"), <em>Load steps</em> (currents and the voltage at a load, total and split by whose step causes it, with the
   allowed band; CSV), <em>Map</em> (the rail's voltage per amp at a resonance, per layer) and <em>Summary</em> (pass / fail per
   load, the worst frequency, resonance peaks, warnings).</li>
+  <li><b>Layout</b> tab: what in the layout raises the impedance and where: rail copper with no return under it and voids or
+  slots in the return plane (ranked by how much inductance they add at each load, listed from 3 %), decaps with a long
+  return path (mounting L above 0.5 nH or above the part's ESL), loads with no decap within 5 mm. Select a line to
+  highlight the part in KiCad; double-click to mark the place on the Map.</li>
+  <li><b>Touchstone…</b> (Impedance tab) saves the rail as an S-parameter file (<code>.sNp</code>, Touchstone v1, real /
+  imaginary, port names in the comments): either between the loads with every part included, or the <em>bare board</em>
+  with a port at each load, each decap and the regulator output, to connect your own capacitor, regulator or package
+  models in a circuit simulator. Reference impedance 50 Ω by default; 1 Ω or 0.1 Ω keeps milliohm values away from
+  S11 = −1 (the file is written with 13 digits, so either is exact).</li>
 </ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/pdn_decaps.png" alt="Decap table" loading="lazy"><figcaption>Decaps: C at bias, ESL, mounting L, resonance, the band each one helps.</figcaption></figure>
+  <figure class="card"><img src="screenshots/pdn_load_steps.png" alt="Load-step waveforms" loading="lazy"><figcaption>Load steps: four staggered 1 A steps and the voltage at U1.</figcaption></figure>
+  <figure class="card"><img src="screenshots/pdn_map.png" alt="Voltage map at a plane resonance" loading="lazy"><figcaption>Map: the rail's voltage at a 772 MHz plane resonance.</figcaption></figure>
+  <figure class="card"><img src="screenshots/pdn_layout.png" alt="Layout findings" loading="lazy"><figcaption>Layout: what raises Z, and where.</figcaption></figure>
+</div>
 
 <h3 id="pdn-reg">Regulator model from the datasheet plot</h3>
 <p>A regulator's datasheet rarely gives its output impedance, but almost always shows a <b>load-transient plot</b>: the load
 current stepping and the output voltage dipping and recovering, with a stated output capacitor. That plot is the regulator's
 loop answering a step through that capacitor. Fit a small loop model to it, and the model answers just as well on your
 board's capacitance, which is rarely the datasheet's.</p>
+<figure><img src="screenshots/pdn_regfit_fit.png" alt="Regulator fit window: datasheet and model per load step, and the output impedance" loading="lazy">
+<figcaption>TPS61021A fitted from its datasheet plot: model over datasheet for both edges (2 % rms), and |Z<sub>out</sub>| with the test C and with 10× it.</figcaption></figure>
 <ol>
   <li><b>Image.</b> "Open image…" or "Paste" a screenshot (zoom the PDF in first), or "Import CSV…" from another digitiser
   (columns t, i, v).</li>
@@ -1043,6 +1062,8 @@ board's capacitance, which is rarely the datasheet's.</p>
   (±50 %) and its ESR", "Match the peak deviation first".</li>
   <li><b>Fit.</b> Rising and falling steps are fitted separately (regulators answer them differently). The Fit tab overlays
   model and plot per edge and plots |Z<sub>out</sub>| with the test C and with 10× it. "Use for this rail".</li>
+  <li><b>Keep it.</b> "Save fit…" (PDN, Regulator box) stores the fit under the regulator's part number; any board with a part
+  of that Value next to the rail gets it automatically, and "Saved fits" picks one by hand.</li>
 </ol>
 <p>The model: Y(s) = K·(s + ω<sub>z</sub>)/(s + ω<sub>0</sub>) · (1 + s/ω<sub>z2</sub>) / (1 + s/ω<sub>p</sub>) /
 (1 + s/(Qω<sub>n</sub>) + s²/ω<sub>n</sub>²) · (1 − s/ω<sub>rhp</sub>). K is the loop's speed (crossover ≈ K / 2πC), the zero
@@ -1126,8 +1147,7 @@ PDN fits the loop.</p>
   <li><b>Feedback sense point.</b> The regulator senses at its own output pin; a remote-sense line is not modelled.</li>
   <li><b>The fitted loop</b> is as good as the plot: a light-load plot in burst mode, a test C that differs from the stated
   one, or a hidden trace limit it. The fit says which parameters hit their limits.</li>
-  <li><b>Not yet:</b> Touchstone export, layout warnings beyond missing return copper, a store of fitted regulator models by
-  part number.</li>
+  <li><b>Not yet:</b> the line-transient (PSRR) plot.</li>
 </ul></div>
 
 <h3 id="pdn-cases">Use cases and worked examples</h3>
@@ -1525,7 +1545,7 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 
 <h2 id="planned">Planned tools</h2>
 <ul>
-  <li><b>PDN, next step</b>: Touchstone export of the rail's impedance matrix, layout warnings (slots and splits under the rail, long capacitor-to-via traces), a store of fitted regulator models by part number, the line-transient (PSRR) plot.</li>
+  <li><b>PDN, next step</b>: the line-transient (PSRR) plot, the regulator's remote-sense point.</li>
   <li><b>SI &amp; Fields</b>: 2D cross-section solver for coupled lines and crosstalk, return-current paths, HV field and clearance.</li>
   <li><b>3D extraction</b> (FastHenry / FastCap) and <b>full-wave</b> (openEMS) export.</li>
   <li><b>Batch command line</b>: rerun the setups saved for a board after every change (from a Makefile, on save, from a git hook or in CI), with pass / fail checks (temperature, voltage at a load, loop inductance, matching yield…) and a report comparing with the previous run.</li>

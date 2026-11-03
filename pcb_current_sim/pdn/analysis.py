@@ -1,6 +1,7 @@
 """PDN analysis: Z(f) at the loads (bare board, + decaps, + VRM), the target check, resonance peaks,
 the decap table, what-if (each decap removed) and voltage maps at a frequency."""
 import math
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -33,6 +34,7 @@ class Result:
     net: object = None           # the network (for maps and what-if; not saved)
     waves: object = None         # transient.Waves of the loads' steps (None: not simulated)
     wave_checks: list = field(default_factory=list)   # per load: dip, peak, allowed, ok, worst contributor
+    layout: list = field(default_factory=list)        # layout.Issue: what in the layout raises Z, and where
 
 
 def peaks_of(f, z, n=6):
@@ -121,12 +123,11 @@ def run(board, stackup, s, progress=lambda m: None):
     for d in s.decaps:
         if d.enabled and f"C:{d.ref}" not in net.terms:
             warnings.append(f"{d.ref}: no rail copper under its pad; left out.")
-        lr, how = l_ret[d.ref]
-        if d.enabled and how.startswith("no return via"):
-            warnings.append(f"{d.ref}: {how} (its return-side mounting L is not counted).")
     res = Result(full.f, full.loads, full.Z, capz.Z, bare.Z, full.I_dec, full.I_vrm, zt, ft,
                  decap_rows(board, s, full, l_ret), checks, peaks, warnings, net.n_nodes, net.pitch,
                  time.time() - t0, net)
+    from . import layout as LA
+    res.layout = LA.check(board, s, res, l_ret)
     if s.transient and any(ld.enabled for ld in s.loads):
         steps(board, stackup, s, res, l_ret, progress)
     res.seconds = time.time() - t0
@@ -209,3 +210,47 @@ def node_voltages(board, stackup, s, res, f, load=0):
     rhs[net.terms[f"L:{res.loads[load]}"]] = 1.0
     V = splu((Y + sp.diags(add)).tocsc(), permc_spec="MMD_AT_PLUS_A").solve(rhs)
     return np.abs(V)
+
+
+EXPORTS = {
+    "loads": "Loads, complete rail (board + decaps + regulator)",
+    "board": "Board only, a port at every load, decap and the regulator",
+}
+
+
+def touchstone(board, stackup, s, res, path, what="loads", z0=50.0, progress=lambda m: None):
+    """Write the rail's impedance as a Touchstone S-parameter file (.s<n>p, RI, reference z0).
+    'loads': Z between the loads with every enabled part (res.Z, the analysed frequencies);
+    'board': the bare copper with a port at each load, decap (enabled or not) and the regulator
+    output, for adding the parts in another tool. Returns the port names."""
+    from ..matching import touchstone as TS
+    import datetime
+    net = res.net
+    head = [f"PDN impedance of rail {', '.join(s.rail)} on {os.path.basename(getattr(board, 'path', '') or '') or 'the board'}",
+            f"Written {datetime.datetime.now():%Y-%m-%d %H:%M} by the PCB Analysis Suite (PDN)",
+            f"Returns: {', '.join(s.returns)}; all ports are against the return (ideal reference)"]
+    if what == "loads":
+        f, Z, names = res.f, res.Z, list(res.loads)
+        head.append("Ports at the loads; decaps and the regulator are inside the network")
+    elif what == "board":
+        if net is None:
+            raise ValueError("Analyse again: this result has no network.")
+        ports = [f"L:{n}" for n in res.loads]
+        ports += [f"C:{d.ref}" for d in s.decaps if f"C:{d.ref}" in net.terms]
+        if "V" in net.terms:
+            ports.append("V")
+        progress(f"Board alone, {len(ports)} ports…")
+        sw = PN.sweep(net, board, stackup, s, f=res.f, decaps=[], vrm=False, ports=ports, progress=progress)
+        f, Z = sw.f, sw.Z
+        names = [p[2:] if p[:2] in ("L:", "C:") else f"regulator output {s.vrm.ref}".strip() for p in ports]
+        kinds = ["load" if p.startswith("L:") else "decap" if p.startswith("C:") else "regulator" for p in ports]
+        names = [f"{n} ({k})" for n, k in zip(names, kinds)]
+        head.append("Bare copper: decaps and the regulator are NOT included, connect them at their ports")
+    else:
+        raise ValueError(f"unknown export {what!r}")
+    n = Z.shape[1]
+    root, ext = os.path.splitext(path)
+    if ext.lower() != f".s{n}p":
+        path = root + f".s{n}p"
+    TS.write(path, f, Z, z0, names, head)
+    return path, names

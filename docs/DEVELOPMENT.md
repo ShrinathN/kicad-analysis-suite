@@ -41,14 +41,14 @@ VENV=~/.var/app/org.kicad.KiCad/cache/kicad/10.0/python-environments/io.github.s
 python3 -m pytest tests
 ```
 
-About 149 tests in about 105 s:
+About 153 tests in about 115 s:
 - `tests/test_solver.py`: the DC, thermal, magnetic and pulse solvers against analytic results; regulators (LDO, dropout, switching, junction estimate), heat at parts, row values with SI prefixes.
 - `tests/test_loop.py`: Switching Loop: PEEC against analytic inductances, detection (buck, boost ICs, rail links, Kelvin sources, gate chains, 4-switch buck-boost), topologies and the operating point from the converter, transients against analytic RLC and ngspice, snubber, EMI spectrum, losses.
 - `tests/test_suite.py`: stackup parsing and the εr(f) model, scenario migration, the session, the component library and external tool detection.
 - `tests/test_linsolve.py`: the solver backends, copper coverage as a union, the setup cache and the thermal cell.
 - `tests/test_extract.py`: the cross-section solver against Hammerstad–Jensen and Wheeler, path tracing (vias, stubs, coplanar, missing return), pours (C, L and R against analytic values and the DC solver), elements across nets and to REF, R calibration, SPICE output, and runs of the subcircuit and a diode element in ngspice (skipped without ngspice).
 - `tests/test_components.py`: the shared component list: migration of the old per-tool lists, per-tool switches, saving, the DC file API, Switching Loop capacitor models, the Components window's operations.
-- `tests/test_pdn.py`: PDN: detection of the rail's parts, a plane pair's C and first cavity resonance, a decap's series resonance, low-f R against the DC solver, the target check, decap table, what-if and maps.
+- `tests/test_pdn.py`: PDN: detection of the rail's parts, a plane pair's C and first cavity resonance, a decap's series resonance, low-f R against the DC solver, the target check, decap table, what-if and maps, Touchstone export (read back; the bare-board file with the parts connected gives the analysed Z), layout checks (a slot in the return plane crossed by the current, copper with no return, a far decap, mounting L), saved regulator fits by part number.
 - `tests/test_regulator.py`: the regulator loop model (droop, crossover), fits recovering known loops from noisy synthetic plots, the boost RHP zero, digitising a synthetic scope image, a fit from a few dozen hand-clicked points (`digitise.from_points`), a ringing recovery found by the auto type, a fitted test capacitance, the fit window, hue colour matching and RDP simplification.
 - `tests/test_pdn_transient.py`: vector fitting, ramp responses against a time simulation, PULSE edges, superposition of several loads.
 - `tests/test_matching.py`: the matching network maths (L-match, transformers, stubs, microstrip, Touchstone, S2P) and the tolerance analyses.
@@ -67,6 +67,7 @@ These open real windows, so run them inside the Flatpak with the plugin venv, an
 | `sim/demo/smoke_matching.py` | Builds a network in the matching editor, edits properties, runs every analysis | `sim/demo/smoke_out/` |
 | `sim/demo/screenshots.py` | Regenerates the documentation screenshots | `docs/screenshots/` |
 | `sim/demo/screenshots_extract.py BOARD` | Trace R/L/C screenshots from a board's saved `extract` setup (the board used for the docs is not in the repository) | `docs/screenshots/extract_*.png` |
+| `sim/demo/screenshots_pdn.py BOARD` | PDN screenshots from a board's saved `pdn` setup, including the regulator fit window (the board used for the docs is not in the repository) | `docs/screenshots/pdn_*.png` |
 
 ```sh
 flatpak run --command=sh org.kicad.KiCad -c "$VENV sim/demo/screenshots.py"
@@ -103,7 +104,7 @@ pcb_current_sim/
     rlc.py                  cross-sections along the path, via / pad models, ladder, DC calibration
     spice.py                .subckt writer (plain R, L, C)
     __main__.py             command line
-  pdn/                      PDN core: model.py (setup, detection), network.py (mesh over an ideal return, Z(f) sweep), analysis.py (target, decaps, what-if, maps), regulator.py (loop model and fit), digitise.py (traces from a plot image), transient.py (load steps: vector fitting, ramp responses, PULSE loads)
+  pdn/                      PDN core: model.py (setup, detection), network.py (mesh over an ideal return, Z(f) sweep), analysis.py (target, decaps, what-if, maps), regulator.py (loop model and fit), digitise.py (traces from a plot image), transient.py (load steps: vector fitting, ramp responses, PULSE loads), layout.py (layout checks), regstore.py (saved regulator fits)
   loop/                     Switching Loop core
     peec.py                 mesh (cells, bars, wires, barrels), partial L, mesh-current solve, capacitance
     circuit.py              small complex nodal solver: copper block + parts, port Z matrices, resonance

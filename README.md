@@ -56,6 +56,13 @@ Pick a rail and its return nets: the tool finds the decoupling capacitors, the r
 - Voltage maps of the rail at a chosen frequency (where a plane resonance sits).
 - The regulator as R + L or as its control loop, fitted to the load-transient plot of its datasheet: a built-in digitiser reads a screenshot (traces by colour, or by clicked points for black-and-white plots), and the fit transfers to your board's capacitance.
 - Load steps: each chip's current as a SPICE-style PULSE, and the rail's voltage at each chip over time, split by which load causes it.
+- Layout findings with their place on the board: voids and slots in the return plane the rail's current crosses, copper with no return under it, decaps with long return paths, chips with no decap nearby.
+- Touchstone export (`.sNp`) of the complete rail between the loads, or of the bare board with a port at every load, decap and the regulator; regulator fits saved by part number for other boards.
+
+| | |
+|---|---|
+| ![Impedance](docs/screenshots/pdn_impedance.png) | ![Load steps](docs/screenshots/pdn_load_steps.png) |
+| ![Plane resonance map](docs/screenshots/pdn_map.png) | ![Regulator fit](docs/screenshots/pdn_regfit_fit.png) |
 
 ## Trace R/L/C → SPICE
 

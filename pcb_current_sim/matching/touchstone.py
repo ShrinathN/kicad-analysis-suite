@@ -1,5 +1,6 @@
-"""Small Touchstone v1 reader (.s1p / .s2p): '# <unit> S <MA|DB|RI> R <z0>' plus data lines."""
+"""Small Touchstone v1 reader and writer (.sNp): '# <unit> S <MA|DB|RI> R <z0>' plus data lines."""
 import os
+import re
 
 import numpy as np
 
@@ -73,13 +74,13 @@ def parse(text, nports, path=""):
 
 def load(path):
     """Cached by path and modification time."""
-    ext = os.path.splitext(path)[1].lower()
-    if ext not in (".s1p", ".s2p"):
-        raise ValueError("expected a .s1p or .s2p file")
+    m = re.fullmatch(r"\.s(\d+)p", os.path.splitext(path)[1].lower())
+    if not m or int(m.group(1)) < 1:
+        raise ValueError("expected a .sNp file (.s1p, .s2p, …)")
     key = (os.path.abspath(path), os.path.getmtime(path))
     if key not in _cache:
         with open(path) as fh:
-            _cache[key] = parse(fh.read(), int(ext[2]), path)
+            _cache[key] = parse(fh.read(), int(m.group(1)), path)
     return _cache[key]
 
 
@@ -92,3 +93,38 @@ def s2abcd(S, z0):
     C = ((1 - s11) * (1 - s22) - s12 * s21) / (d * z0)
     D = ((1 - s11) * (1 + s22) + s12 * s21) / d
     return A, B, C, D
+
+
+def z2s(Z, z0):
+    """(F, n, n) impedance matrix -> S referenced to real z0 in every port: (Z - z0)(Z + z0)^-1."""
+    eye = np.eye(Z.shape[1])
+    return np.linalg.solve((Z + z0 * eye).transpose(0, 2, 1), (Z - z0 * eye).transpose(0, 2, 1)).transpose(0, 2, 1)
+
+
+def write(path, f, Z, z0=50.0, names=(), comments=()):
+    """Write the impedance matrices Z (F, n, n) at f [Hz] as a Touchstone v1 S-parameter file
+    (RI, reference z0 in every port). n ports: the file's extension should be .s<n>p. Port names
+    and comments go into '!' lines. Rows of 3+ port files are broken after 4 pairs, as v1 asks."""
+    f = np.asarray(f, float)
+    Z = np.asarray(Z, complex)
+    n = Z.shape[1]
+    S = z2s(Z, z0)
+    if n == 2:
+        S = S.transpose(0, 2, 1)              # v1 two-port order S11 S21 S12 S22
+    num = lambda c: f"{c.real: .12e} {c.imag: .12e}"
+    with open(path, "w", encoding="ascii", errors="replace") as fh:
+        for c in comments:
+            fh.write(f"! {c}\n")
+        for k, name in enumerate(names):
+            fh.write(f"! Port {k + 1}: {name}\n")
+        fh.write(f"# HZ S RI R {z0:g}\n")
+        for i in range(len(f)):
+            head = f"{f[i]:.12e}"
+            if n <= 2:
+                fh.write(head + " " + " ".join(num(c) for c in S[i].ravel()) + "\n")
+                continue
+            for r in range(n):
+                row = S[i, r]
+                for q in range(0, n, 4):
+                    lead = head if (r == 0 and q == 0) else " " * len(head)
+                    fh.write(lead + " " + " ".join(num(c) for c in row[q:q + 4]) + "\n")

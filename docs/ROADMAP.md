@@ -9,7 +9,7 @@ The suite is being built in this order. The plan below was worked out with the c
 | – | Trace R/L/C → SPICE | done |
 | – | Switching Loop: extraction, switching transient, EMI and design aids; buck, boost, half-bridge and 4-switch buck-boost cells | done |
 | – | DC & Thermal: linear and switching regulators | done |
-| 3 | PDN (AC power integrity), including regulator load-step behaviour | done (steps 1-4: impedance, decaps, regulator fit, load steps); next: Touchstone export, layout warnings, a store of fitted regulator models |
+| 3 | PDN (AC power integrity), including regulator load-step behaviour | done (impedance, decaps, regulator fit, load steps, Touchstone export, layout checks, saved regulator fits); later: line transient (PSRR), remote sense |
 | – | Batch command line: rerun the saved setups after every board change, with pass / fail checks and a report (design discussed, see below) | planned |
 | 4 | 3D extraction (FastHenry / FastCap) | planned |
 | 5 | Full-wave export (openEMS) | planned |
@@ -117,7 +117,7 @@ Framework, to build first:
 2. **Matching & Tolerance**: self-contained and quick to finish, and it establishes the component library.
 2b. **Trace R/L/C → SPICE** (done 2026-10-30, at the user's request): R, L, C of the copper between pads, SPICE RLC subcircuit. Pours (meshed, Kron-reduced R/L/C) and R / diode / C / L elements between pads were added the same day. Next for it: coupled traces (crosstalk), frequency-dependent R (skin-effect R-L network per section), solder mask, sectioned models of pours larger than λ/10, PDN reuse of the zone mesh, via and cross-section models.
 2c. **Switching Loop** (decided 2026-10-30, before PDN; the user counts it as part of the PDN suite). Step 1 done 2026-10-30: PEEC extraction of the cell's copper (ground as a conductor), loop L per commutation with an energy breakdown, ringing, gate loops and common-source L, maps, SPICE. Step 2: switching transients (built-in nodal solver with datasheet models; vendor SPICE models through KiCad's libngspice), gate coupling (Cgd, L_cs, mutual M, stray C) in one circuit. Step 3: EMI spectrum, snubber designer, before / after comparison, losses into DC & Thermal. Also planned: one component list shared by all tools. Step 2 done 2026-10-31: switching transients (built-in MNA solver with datasheet models; ngspice through KiCad's libngspice for vendor models), plus usability work (cell diagram, checks, plain-language summary). Next: step 3 (EMI spectrum, snubber designer, what-if comparisons), saved part models (the shared component list).
-3. PDN (steps 1-4 done 2026-11-01: Z(f) solver and window, regulator loop fitted to the datasheet's load-transient plot with a built-in digitiser, load-step droop by vector fitting). Next: step 5 (Touchstone export, layout warnings, docs), a store of fitted regulator models by part number, the line-transient (PSRR) plot.
+3. PDN (steps 1-4 done 2026-11-01: Z(f) solver and window, regulator loop fitted to the datasheet's load-transient plot with a built-in digitiser, load-step droop by vector fitting). Step 5 done 2026-11-04 (Touchstone export, layout checks, saved regulator fits). Later: the line-transient (PSRR) plot, remote sense.
 4. FastHenry / FastCap extraction.
 5. openEMS export.
 6. SI & Fields.
