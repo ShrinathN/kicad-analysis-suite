@@ -66,6 +66,11 @@ def open_window(session, key, parent=None):
             return wx.MessageBox("Load a board first.", "Switching Loop", parent=parent)
         from .loop import LoopFrame
         w = LoopFrame(session)
+    elif key == "extract3d":
+        if session.board is None:
+            return wx.MessageBox("Load a board first.", "3D extraction", parent=parent)
+        from .em3d import Em3dFrame
+        w = Em3dFrame(session)
     elif key == "pdn":
         if session.board is None:
             return wx.MessageBox("Load a board first.", "PDN", parent=parent)

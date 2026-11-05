@@ -162,15 +162,58 @@ def _parallel(F, i, j, sgn):
         long = (np.minimum(li[q], lj[q]) > LONG * S[q]) | (d[q] >= EXACT * S[q])
         if long.any():
             g = np.flatnonzero(long)
-            gmd = np.exp(log_gmd(*(x[g] for x in rect)))
-            M[q[g]] = axial(0.0, li[q[g]], a0[q[g]], a1[q[g]], gmd)
+            p = q[g]
+            gmd = _gmd_unique(wi[p], hi[p], np.abs(dp[p]), np.abs(dq[p]), wj[p], hj[p])
+            M[p] = axial(0.0, li[p], a0[p], a1[p], gmd)
         if (~long).any():
-            s = np.flatnonzero(~long)
-            p = q[s]
-            pi0, pi1, qi0, qi1, pj0, pj1, qj0, qj1 = (x[s] for x in rect)
-            I = bar_integral(li[p], a0[p], a1[p], pi0, pi1, qi0, qi1, pj0, pj1, qj0, qj1)
-            M[p] = I / (wi[p] * hi[p] * wj[p] * hj[p])
+            p = q[np.flatnonzero(~long)]
+            M[p] = _exact_unique(li[p], a0[p], a1[p], wi[p], hi[p], dp[p], dq[p], wj[p], hj[p])
     return KM * sgn * M
+
+
+def _gmd_unique(wi, hi, dp, dq, wj, hj):
+    """GMD of centred rectangles wi x hi and wj x hj offset by (dp, dq) >= 0, each distinct
+    geometry computed once (it does not depend on the bars' lengths)."""
+    _, u, inv = np.unique(_hash([wi, hi, dp, dq, wj, hj]), return_index=True, return_inverse=True)
+    g = np.exp(log_gmd(-wi[u] / 2, wi[u] / 2, -hi[u] / 2, hi[u] / 2,
+                       dp[u] - wj[u] / 2, dp[u] + wj[u] / 2, dq[u] - hj[u] / 2, dq[u] + hj[u] / 2))
+    return g[inv.ravel()]
+
+
+_MIX = np.array([0x9E3779B97F4A7C15, 0xC2B2AE3D27D4EB4F, 0x165667B19E3779F9, 0xD6E8FEB86659FD93,
+                 0xFF51AFD7ED558CCD, 0xC4CEB9FE1A85EC53, 0x94D049BB133111EB, 0xBF58476D1CE4E5B9,
+                 0x2545F4914F6CDD1D], dtype=np.uint64)
+
+
+def _hash(cols):
+    """One 64-bit hash per row of the quantised columns (KEY_RES): equal geometry, equal hash;
+    a collision between different geometries is ~1e-19 per pair of shapes."""
+    h = np.zeros(len(cols[0]), np.uint64)
+    with np.errstate(over="ignore"):
+        for c, m in zip(cols, _MIX):
+            k = np.round(np.asarray(c) / KEY_RES).astype(np.int64).view(np.uint64)
+            h = (h ^ (k * m)) * np.uint64(0x9E3779B97F4A7C15)
+            h ^= h >> np.uint64(29)
+    return h
+
+
+KEY_RES = 1e-10                      # m: pairs whose relative geometry agrees to this share one exact integral
+
+
+def _exact_unique(l, a0, a1, wi, hi, dp, dq, wj, hj):
+    """Exact six-fold integrals / (A_i A_j) of parallel bar pairs, each distinct relative geometry
+    computed once.  Both cross-sections are centred rectangles, so only |dp| and |dq| matter, and
+    reversing the axis maps j's span [a0, a1] on [0, l] to [l - a1, l - a0]: the canonical form
+    takes the smaller start.  On a pour's cell grid a few hundred shapes cover 10⁵ pairs."""
+    dp, dq = np.abs(dp), np.abs(dq)
+    flip = (l - a1) < a0
+    a0, a1 = np.where(flip, l - a1, a0), np.where(flip, l - a0, a1)
+    _, first, inv = np.unique(_hash([l, a0, a1, wi, hi, dp, dq, wj, hj]), return_index=True, return_inverse=True)
+    u = first
+    I = bar_integral(l[u], a0[u], a1[u], -wi[u] / 2, wi[u] / 2, -hi[u] / 2, hi[u] / 2,
+                     dp[u] - wj[u] / 2, dp[u] + wj[u] / 2, dq[u] - hj[u] / 2, dq[u] + hj[u] / 2)
+    vals = I / (wi[u] * hi[u] * wj[u] * hj[u])
+    return vals[inv.ravel()]
 
 
 def _angled(F, i, j, dot):
@@ -195,12 +238,18 @@ def _angled(F, i, j, dot):
     return KM * M
 
 
-def inductance_matrix(F, block_bytes=64 << 20):
+def inductance_matrix(F, block_bytes=None):
     """Dense partial inductance matrix [H] of all filaments (n x n), upper-triangle row blocks
-    in threads (numpy releases the GIL in its array loops), mirrored."""
+    in threads (numpy releases the GIL in its array loops), mirrored.  Blocks are large (a few
+    hundred rows): small ones cost more in per-block work than they save (28-row blocks of a
+    7400-filament plane took 21 s, 225-row ones 5 s).  block_bytes: temporaries per thread
+    (default 1/40 of the free memory, 128-512 MB)."""
     n = len(F)
     L = np.zeros((n, n))
-    rows = int(min(512, max(4, block_bytes // (8 * 40 * max(n, 1)))))
+    if block_bytes is None:
+        from ..loop.peec import available_ram
+        block_bytes = int(min(512 << 20, max(128 << 20, available_ram() // (40 * max(THREADS, 1)) * THREADS)))
+    rows = int(min(1024, max(16, block_bytes // (8 * 40 * max(n, 1)))))
 
     def work(s):
         e = min(s + rows, n)

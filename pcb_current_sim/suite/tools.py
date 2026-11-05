@@ -26,7 +26,8 @@ TOOLS = (
     Tool("si", "SI & Fields", "SIGNAL & FIELDS",
          "Trace Z₀ and εeff, crosstalk, return path at frequency, HV E-field and clearance."),
     Tool("extract3d", "3D extraction", "SIGNAL & FIELDS",
-         "FastHenry / FastCap: loop L, via arrays, R_ac(f), coils, parasitic C; SPICE subcircuits."),
+         "R(f), L(f), Q and coupling of any copper between pads (3D filaments, skin and proximity effect); "
+         "wideband SPICE.", True),
     Tool("matching", "Matching & Tolerance", "RF / CIRCUIT",
          "Ladder networks with real parts: corners, Monte Carlo, worst case, yield, Smith chart.", True),
     Tool("openems", "Full-wave (openEMS)", "RF / CIRCUIT",

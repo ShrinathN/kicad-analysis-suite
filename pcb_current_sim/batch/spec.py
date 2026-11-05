@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from . import tomlio
 
 SUFFIX = ".simtests.toml"
-TOOLS = ("dc", "pdn", "loop", "extract", "matching")
+TOOLS = ("dc", "pdn", "loop", "extract", "extract3d", "matching")
 HEADER = (
     "PCB Analysis Suite: simulation tests for one board.",
     "Run:   python3 -m pcb_current_sim run THIS_FILE --test NAME   (or --all)",

@@ -16,7 +16,7 @@ from ..batch.tools import get as tool_mod
 from .layout import AutoList, refit, scrolled
 
 TOOL_TITLES = {"dc": "DC & Thermal", "pdn": "PDN", "loop": "Switching Loop", "extract": "Trace R/L/C",
-               "matching": "Matching"}
+               "extract3d": "3D extraction", "matching": "Matching"}
 STATUS = {"pass": "✔ pass", "fail": "✖ FAIL", "error": "⚠ error", "done": "• ran"}
 
 

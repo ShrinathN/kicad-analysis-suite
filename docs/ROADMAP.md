@@ -11,9 +11,19 @@ The suite is being built in this order. The plan below was worked out with the c
 | – | DC & Thermal: linear and switching regulators | done |
 | 3 | PDN (AC power integrity), including regulator load-step behaviour | done (impedance, decaps, regulator fit, load steps, Touchstone export, layout checks, saved regulator fits); later: line transient (PSRR), remote sense |
 | – | Simulation tests: a tests file per board (every parameter of each simulation, pass / fail checks, outputs), run from the command line, a Makefile, a script or the Tests window; reports in simulations/<timestamp>/ with comparison to the previous run | done |
-| 4 | 3D extraction (FastHenry / FastCap) | planned |
+| 4 | 3D extraction (FastHenry / FastCap methods, built in) | steps 1-2 of 7 built (R / L / coupling of copper) |
 | 5 | Full-wave export (openEMS) | planned |
 | 6 | SI & Fields | planned |
+
+## 3D extraction (decided 2026-11-05)
+Our own code implementing FastHenry's (filament PEEC) and FastCap's (panel) methods, cross-checked against FastHenry / FastCap built from source; magnetic cores from a core library.
+1. Filament solver core + validation. **Done.**
+2. Board copper -> 3D geometry, window: R(f), L(f), Q, coupling, current maps, wideband SPICE, batch tests. **Done.**
+3. Magnetic materials: core cells coupled to the filaments, material library (complex μ(f), gaps, DC bias, conductivity, core loss, μ(T)), core library (E / ER / EQ / PQ / RM / plate, toroid, pot, rod, ferrite sheet).
+4. PCB coils and planar magnetics (with cores): L, R_ac, Q, k, leakage, inter-turn C, SRF.
+5. Coupling to Switching Loop cells (M di/dt pickup), shunt ESL and Kelvin routing, via-array current sharing.
+6. Capacitance matrix (FastCap method, layered dielectrics), C to a chassis / heatsink plane.
+7. FastHenry / FastCap input export, docs.
 
 ## Batch command line (discussed 2026-11-01; built 2026-11-04 as Simulation tests, see the user guide)
 - `python3 -m pcb_current_sim run BOARD.kicad_pcb` reruns every setup saved in the board's scenario file (the GUI is where you set them up), headless.

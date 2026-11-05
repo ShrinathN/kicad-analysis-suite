@@ -107,6 +107,15 @@ class System:
         """Filament currents [A] for port currents i_port (X from direct)."""
         return self.Q @ (X @ np.asarray(i_port, complex))
 
+    def currents_reduced(self, model, f, i_port):
+        """Filament currents [A] at f for port currents i_port, from the reduced model (its
+        projection basis V spans the mesh currents)."""
+        s = 1j * TWO_PI * f
+        Zp = model.Z(f)[0]
+        v = Zp @ np.asarray(i_port, complex)
+        xr = linalg.solve(model.Rr + s * model.Lr, model.Er @ v)
+        return self.Q @ (model.V @ xr)
+
     # -- reduced model ----------------------------------------------------------------
     def reduce(self, f_min, f_max, tol=1e-5, max_blocks=60, progress=lambda m: None):
         """Passive reduced model valid from DC to f_max (checked from f_min).  Expansion points:
@@ -125,6 +134,8 @@ class System:
         model = None
         for it in range(max_blocks):
             for k, fac in enumerate(facs):
+                if heads[k] is not None and heads[k].shape[1] == 0:
+                    continue                                 # this point's Krylov space is exhausted
                 W = linalg.cho_solve(fac, self.E if heads[k] is None else self.Lq @ heads[k], check_finite=False)
                 W = _orth(W, V)
                 if W.shape[1] == 0:
@@ -149,6 +160,8 @@ class System:
 def _orth(W, V, drop=1e-10):
     """W orthonormalised against V and itself (two Gram-Schmidt passes, QR), columns that fall
     below drop x their original norm removed (deflation)."""
+    if W.shape[1] == 0:
+        return W
     n0 = np.linalg.norm(W, axis=0)
     for _ in range(2):
         if V.shape[1]:

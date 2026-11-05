@@ -4,7 +4,7 @@ The full reference for the PCB Analysis Suite: installation, every tool and opti
 
 ## Overview
 
-The suite has five tools: **DC & Thermal**, **Switching Loop**, **PDN (AC)**, **Trace R/L/C → SPICE** and **Matching & Tolerance** (see [Suite](#suite)). Any of their setups can be kept as a test and rerun from the command line with pass / fail checks and a report (see [Simulation tests](#simulation-tests-command-line)). The DC & Thermal tool runs a DC simulation of copper nets in a `.kicad_pcb`. For each simulated net it produces:
+The suite has six tools: **DC & Thermal**, **Switching Loop**, **PDN (AC)**, **Trace R/L/C → SPICE**, **3D extraction** and **Matching & Tolerance** (see [Suite](#suite)). Any of their setups can be kept as a test and rerun from the command line with pass / fail checks and a report (see [Simulation tests](#simulation-tests-command-line)). The DC & Thermal tool runs a DC simulation of copper nets in a `.kicad_pcb`. For each simulated net it produces:
 - current density |J|
 - voltage (IR drop), with current paths, loads and voltage sources
 - Joule power density
@@ -58,7 +58,7 @@ All windows run in one process and share the loaded board, the stackup and the c
   - SIGNAL & FIELDS: Trace R/L/C → SPICE, SI & Fields, 3D extraction
   - RF / CIRCUIT: Matching & Tolerance, Full-wave (openEMS)
 
-  DC & Thermal, Trace R/L/C → SPICE and Matching & Tolerance are built; the other tiles are marked *planned*.
+  SI & Fields and Full-wave (openEMS) are marked *planned*; the other tiles are built.
 - **Stackup & materials** shows copper thickness (with overrides) and dielectric thickness, εr and tanδ.
   - εr and tanδ come from the board's stackup, default to 4.3 / 0.02, and can be edited at a reference frequency.
   - Plies inside one dielectric are combined in series. KiCad's `addsublayer` plies are read.
@@ -178,6 +178,23 @@ All windows run in one process and share the loaded board, the stackup and the c
 - **Limits.** Quasi-static: no radiation, no dispersion; good while the cross-section is much smaller than a wavelength (low GHz on normal boards). No coupling to other signal nets (crosstalk is planned with SI & Fields). The ladder's R is DC, so skin-effect loss is not in the time-domain model (R′(f) is reported). Without return copper within the window, L is the trace's partial inductance and C ≈ 0 (red dashed on the board view). Solder mask is not modelled (Z₀ reads 1–3 % high on outer layers).
 - **Saving.** Ports, return nets and options go into the scenario's `extract` section; elements are the board's shared component list (Suite → Components), and the list here shows the parts added by hand and the resistors switched on (tick "Show the board's resistors" for all).
 
+**3D extraction** gives the resistance and inductance of any copper between pads as functions of frequency, R(f) and L(f), with skin and proximity effect, plus the coupling between several such paths. Uses: the AC resistance and loss of power copper at the switching harmonics, PCB coils (L, R_ac, Q), magnetic pickup between a switching loop and a sense or signal loop, a shunt's ESL and Kelvin routing, current sharing in via arrays. It is our implementation of FastHenry's method, checked against FastHenry itself.
+- **How it works.** The copper of the ticked nets in a window around the ports is cut into straight bars: each track piece at its true width, pours and pads as a grid of cells, each via barrel as a ring of six plated bars. Every bar is split into parallel *filaments*, thinner towards its edges and faces (down to half the skin depth at the chosen frequency), and every pair of filaments has a partial mutual inductance from exact formulas. Solving the filament network gives each port's impedance; current crowding to the edges (skin effect) and towards neighbouring conductors (proximity effect) comes out of the solve. A reduced model built from the solve (Krylov projection) gives Z at every frequency from DC up at once; it is exact at DC and passive.
+- **Ports.** A port is a pair of pad groups: current in at the + pads, out at the − pads, through the copper (all pads of one side are one node, e.g. a part's pins in parallel). "Add…" (name, + pads, − pads), or select two pads in the PCB editor and "From KiCad selection". Two or more ports give mutual inductance M and coupling k between them.
+- **Links.** Ideal shorts between pad groups, to close a loop through a part: with the port at a regulator's output and ground pins and a link between the load's supply and ground pins, the port sees the whole loop out on the supply copper and back on the return.
+- **Conductors.** The ports' and links' nets are always in. Tick other nets to include them as *passive* conductors: eddy currents in a ground pour under a coil lower its L at high frequency and raise its R; a neighbouring trace does the same to a loop.
+- **Options.** Frequency range; "Filaments for" (the skin depth the filaments resolve, blank = f max); the pour / pad cell size (tracks keep their true width); the margin around the ports' copper; most filaments across a track, through a track and through a pour; the filament limit (memory grows as the square: about 5 GB at 12000; above the limit the filaments per track are reduced, with a warning).
+- **Results.**
+  - *Summary*: per port R and L at DC, mid band and f max, R(f max) / R_dc, the highest Q = ωL / R and where; per pair of ports M and k at DC, mid band and f max.
+  - *R, L, Q (f)*: the curves, and k(f) for several ports.
+  - *Current*: the sheet current |K| [A/mm] on each layer for 1 A into a port, at DC, mid band or f max (pours as cells, tracks as their true outline, vias marked). Click a track to see the current density across its cross-section (edge crowding at high frequency).
+  - *SPICE*: a wideband subcircuit (one port: plain parallel R-L branches, exact at DC and right at every frequency; several ports: one R-L branch per mode driven through E / F controlled sources), or R, L and coupled K at one frequency (plain R, L, K). Pins `NAME_p` / `NAME_m` per port. Checked in ngspice against the solve (1e-4).
+  - "Export CSV…": R, L of every port and the couplings at every frequency.
+- **Accuracy.** Round-wire skin effect within 0.3 % of the exact Bessel solution; bar self-inductance within 0.2 % of Grover; two coaxial loops within 0.1-0.15 % of Maxwell's formula; against FastHenry with the same filaments: a hairpin within 0.1 %, a 3-turn spiral coil L within 0.15 % and R within 0.45 % at 1 GHz; a track over a ground pour within 2.5 % of the microstrip formula; a coil drawn in KiCad equals the same coil built from segments.
+- **Filaments matter.** Too few filaments read R at high frequency low (a coil's R at 100 MHz 35 % low with 5 x 3 per track): the tool picks the counts from the skin depth; lower "Filaments for" only to save time when the top of the band matters less.
+- **Limits.** Quasi-static: no radiation, valid while the copper is shorter than about λ/10. No capacitance yet (so no self-resonance), no magnetic materials (cores) yet. Parts between pads are not in the circuit: close loops with links. Dense matrices: a region of a board (a coil, a converter's power stage, a shunt), not a whole board at fine cells.
+- **Saving.** The setup goes into the scenario's `extract3d` section; "Save as test…" keeps it as a simulation test.
+
 **Matching & Tolerance** checks whether a matching network still works across real part tolerances.
 - **Visual editor.** Symbols appear on the schematic as you add parts from the palette: series or shunt L, C and R, transmission lines, open and shorted stubs, and a two-port from an `.s2p` file.
   - New parts go in at the ▼ marker. Drag a part to move it; right-click it or use the buttons to flip it between series and shunt, duplicate or delete it.
@@ -198,7 +215,7 @@ All windows run in one process and share the loaded board, the stackup and the c
 
 **Highlight in KiCad.** With the suite started from KiCad, clicking parts in a tool's list selects their footprints in the PCB editor: the Switching Loop's parts and gate drives (MOSFET, driver, gate resistor), DC & Thermal's excitations and elements, the Trace tool's ports and elements. Several rows selected (Shift / Ctrl-click) are sent at once. Switch it off with Suite → "Highlight selected parts in KiCad". The schematic editor: kicad-python 0.8 cannot reach it yet (its schematic module fails to import), so the symbols are highlighted only through KiCad's own cross-probing from the PCB editor, if that is on and reacts to API selections; the status bar says what was selected.
 
-**Scenario file.** `<board>.current_sim.json` (version 2) has one section per tool: `stackup`, `components`, `dc`, `matching`, `extract`, `loop` and `pdn`.
+**Scenario file.** `<board>.current_sim.json` (version 2) has one section per tool: `stackup`, `components`, `dc`, `matching`, `extract`, `extract3d`, `loop` and `pdn`.
 Each tool rewrites only its own section. Version-1 files load as the `dc` section, and their copper-thickness overrides move to `stackup`.
 
 ## Simulation tests (command line)
@@ -370,6 +387,21 @@ Outputs: `csv` (commutations.csv (L, breakdown, ringing), gates.csv, edges.csv (
 | `impedance_steps` |  |  | number of Z0 steps above 10 % along the path |
 
 Outputs: `spice` (<NET>.lib: the SPICE subcircuit (plain R, L, C)); `csv` (pairs.csv (totals per port), segments.csv, vias.csv, pads.csv).
+
+**3D extraction** (`tool = "extract3d"`)
+
+| Value | Unit | Per | Meaning |
+|---|---|---|---|
+| `R_dc_mOhm` | mΩ | port | DC resistance of a port |
+| `L_dc_nH` | nH | port | inductance of a port with the DC current pattern |
+| `R_fmax_mOhm` | mΩ | port | resistance of a port at f max (skin and proximity effect) |
+| `L_fmax_nH` | nH | port | inductance of a port at f max |
+| `R_ratio` |  | port | R(f max) / R_dc of a port |
+| `Q_max` |  | port | highest Q = ωL / R of a port over the band |
+| `k_max` |  | pair | largest |coupling factor| between two ports over the band (key: A-B) |
+| `filaments` |  |  | number of filaments in the solve |
+
+Outputs: `spice` (em3d.lib: the wideband SPICE model); `csv` (impedance.csv: R and L of every port and the couplings at every frequency).
 
 **Matching & Tolerance** (`tool = "matching"`)
 

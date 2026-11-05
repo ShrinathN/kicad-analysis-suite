@@ -200,6 +200,15 @@ class _DSU:
         return min(ra, rb)
 
 
+def _end_on_copper(x, y, w, shapes):
+    """True if a track end (disc of diameter w at x, y) touches one of the copper shapes: its
+    centre or a point of its rim (16 points) is inside one."""
+    th = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+    X = np.concatenate([[x], x + w / 2 * np.cos(th)])
+    Y = np.concatenate([[y], y + w / 2 * np.sin(th)])
+    return any(bool(g.inside(X, Y).any()) for g in shapes)
+
+
 def _cells_of(geom, grid, ok, pos):
     """Flat indices of cells whose centre lies in `geom` and where `ok`; else the cell under `pos`
     (or the nearest ok cell within two cells) so that small pads on a coarse grid still connect."""
@@ -235,7 +244,8 @@ def quadtree_sizes(want):
     return size[:ny, :nx]
 
 
-def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25e-6, level=None):
+def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25e-6, level=None,
+          wire_width=None, piece=None):
     """Mesh the copper of `nets` inside `window` (x0, y0, x1, y1 mm) at `pitch` mm.
 
     terminals: {name: [board pad indices]} - each is one equipotential node (a device pin: all its
@@ -243,9 +253,13 @@ def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25
     level: None (uniform) or a function (X, Y) mm -> wanted cell size in fine cells (1, 2 or 4).
     The copper is rasterised at `pitch` everywhere (connectivity is decided there); coarse cells are
     aligned blocks of fine cells of one net, and the bars between two blocks are the sum of their
-    shared fine faces, running between the blocks' centres."""
+    shared fine faces, running between the blocks' centres.
+    wire_width: tracks narrower than this (mm) are wires (default WIRE x pitch; the 3D extraction
+    passes inf: every track keeps its true width); piece: longest wire piece (mm, default one cell
+    or the track width)."""
     grid = rz.make_grid(board, pitch, margin=0.0, bbox=window)
-    wires = _narrow_tracks(board, nets, window, pitch)
+    wires = _narrow_tracks(board, nets, window, pitch, wire_width)
+    true_tracks = wire_width is not None and wire_width >= 1e9      # 3D extraction: every track as drawn
     skip = {k for k, _ in wires}
     rb = copy.copy(board)
     rb.tracks = [t for k, t in enumerate(board.tracks) if k not in skip]
@@ -302,7 +316,8 @@ def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25
     for k, t in wires:
         L, nid = t.layer, R.nets.index(t.net)
         for (xa, ya), (xb, yb), (va, ta), (vb, tb) in _clip_polyline(_polyline(t), window):
-            npc = max(1, int(math.ceil(math.hypot(xb - xa, yb - ya) / max(pitch, t.width))))
+            step = max(pitch, t.width) if piece is None else max(piece, pitch, t.width)
+            npc = max(1, int(math.ceil(math.hypot(xb - xa, yb - ya) / step)))
             base = n + len(wpts)
             for q in range(npc + 1):
                 wpts.append((xa + (xb - xa) * q / npc, ya + (yb - ya) * q / npc, layers.index(L), nid))
@@ -325,12 +340,28 @@ def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25
     warnings = [w for w in R.warnings if "overlaps" not in w]     # coarse cells straddle clearances
     # a track's ends join the copper under them (pads, pours, wide tracks, via rings); every vertex
     # joins the nearest node of other wires of its net there (consecutive pieces, T-junctions)
+    # copper shapes per (layer, net) for the point test below
+    shapes = {}
+    for p in board.pads:
+        if p.net in nets and p.geom is not None:
+            for L in p.layers:
+                shapes.setdefault((L, R.nets.index(p.net)), []).append(p.geom)
+    for zn in board.zones:
+        if zn.net in nets:
+            shapes.setdefault((zn.layer, R.nets.index(zn.net)), []).append(zn.geom)
     for q in range(n_cells, n):               # wire nodes on copper of their net (pads, rings, pours): merged
         L = layers[lay_of[q]]
         j, i = grid.cell(cx[q], cy[q])
         if 0 <= j < grid.ny and 0 <= i < grid.nx:
             c = cell_node[L][j, i]
             if c >= 0 and R.layers[L].net[j, i] == net_of[q]:
+                # a partly covered cell can straddle a gap: a track passing 0.3 mm from a pad of its own
+                # net would join it on a 0.6 mm grid (a coil's next turn shorted to its end pad).  Merge
+                # only where the node is on the copper (or the cell is full)
+                if true_tracks and R.layers[L].f[j, i] < 0.999:
+                    X, Y = np.array([cx[q]]), np.array([cy[q]])
+                    if not any(bool(g.inside(X, Y)[0]) for g in shapes.get((L, int(net_of[q])), [])):
+                        continue
                 dsu.union(q, int(c))
     owner = {}
     for q, (a, b, *_rest) in enumerate(wbars):
@@ -339,7 +370,13 @@ def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25
     for node, x, y, L, nid, w, track_end in w_ends:
         if track_end:
             ok = (cell_node[L] >= 0) & (R.layers[L].net == nid)
-            cells = _cells_of(Capsule(x, y, x, y, w / 2 + grid.h / 2), grid, ok, (x, y))
+            # Switching Loop (narrow wires on a coarse mesh): join the copper cells near the end, else the
+            # nearest one.  3D extraction (true_tracks): only where the end touches a pad or pour of its
+            # net - a coil corner otherwise joined the end pad or the next turn 1-2 cells away
+            if true_tracks and not _end_on_copper(x, y, w, shapes.get((L, nid), [])):
+                cells = np.zeros(0, np.int64)
+            else:
+                cells = _cells_of(Capsule(x, y, x, y, w / 2 + grid.h / 2), grid, ok, (x, y))
             if cells.size:
                 c0 = cell_node[L].ravel()[cells]
                 dsu.union(node, int(c0[np.argmin(np.hypot(cx[c0] - x, cy[c0] - y))]))
@@ -531,7 +568,7 @@ def _clip_polyline(pts, box):
     return out
 
 
-def _narrow_tracks(board, nets, window, pitch):
+def _narrow_tracks(board, nets, window, pitch, wire_width=None):
     """(index, track) of tracks of `nets` touching the window that are narrower than WIRE x pitch
     and not buried in a pour of their own net on their layer (those stay in the raster)."""
     x0, y0, x1, y1 = window
@@ -540,7 +577,7 @@ def _narrow_tracks(board, nets, window, pitch):
         zones.setdefault((z.net, z.layer), []).append(z.geom)
     out = []
     for k, t in enumerate(board.tracks):
-        if t.net not in nets or t.width >= WIRE * pitch:
+        if t.net not in nets or t.width >= (WIRE * pitch if wire_width is None else wire_width):
             continue
         bx = t.geom.bbox
         if bx[2] < x0 or bx[0] > x1 or bx[3] < y0 or bx[1] > y1:
