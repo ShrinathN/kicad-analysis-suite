@@ -127,6 +127,8 @@ svg.flow .sm{font-size:11px; fill:var(--ink2)}
       <ol><li><a href="#dc-how">How it works</a></li><li><a href="#dc-use">Using it</a></li><li><a href="#dc-calc">Trace calculator</a></li><li><a href="#dc-limits">Limits</a></li><li><a href="#dc-cases">Use cases</a></li></ol></li>
     <li><a href="#trace">Trace R/L/C → SPICE</a>
       <ol><li><a href="#trace-how">How it works</a></li><li><a href="#trace-use">Using it</a></li><li><a href="#trace-calc">Line calculator</a></li><li><a href="#trace-limits">Limits</a></li><li><a href="#trace-cases">Use cases</a></li></ol></li>
+    <li><a href="#em3d">3D extraction</a>
+      <ol><li><a href="#em3d-how">How it works</a></li><li><a href="#em3d-use">Using it</a></li><li><a href="#em3d-calc">Skin-depth explorer</a></li><li><a href="#em3d-limits">Limits</a></li><li><a href="#em3d-cases">Use cases</a></li></ol></li>
     <li><a href="#loop">Switching Loop</a>
       <ol><li><a href="#loop-how">How it works</a></li><li><a href="#loop-use">Using it</a></li><li><a href="#loop-ring">Ringing &amp; snubber explorer</a></li><li><a href="#loop-emi">Spectrum explorer</a></li><li><a href="#loop-limits">Limits</a></li><li><a href="#loop-cases">Use cases</a></li></ol></li>
     <li><a href="#pdn">PDN (AC power integrity)</a>
@@ -151,11 +153,12 @@ svg.flow .sm{font-size:11px; fill:var(--ink2)}
 <p class="lead">A set of board-level simulation tools that run inside KiCad 10. They read the layout you drew, not a
 schematic, and answer the questions a schematic cannot: how hot this copper gets, how much voltage the planes lose, what
 inductance the hot loop of this converter has, whether this rail holds its voltage when the chips step their current,
-what SPICE model this trace is, and whether this matching network survives real part tolerances.</p>
+what SPICE model this trace is, how a coil's L and Q or a power path's losses change with frequency, and whether this matching network survives real part tolerances.</p>
 
 <div class="cards">
   <div class="card"><h4>DC &amp; Thermal <span class="badge ok">ready</span></h4><p>Current density, IR drop and copper temperature of any nets, with resistors, diodes and loads; short-pulse fusing; magnetic field maps; loop inductance.</p></div>
   <div class="card"><h4>Trace R/L/C → SPICE <span class="badge ok">ready</span></h4><p>Turns the copper between two or more pads (tracks, vias, pours) into an R-L-C ladder for any SPICE, with Z₀ and delay per segment.</p></div>
+  <div class="card"><h4>3D extraction <span class="badge ok">ready</span></h4><p>R(f), L(f), Q and coupling of any copper between pads, with skin and proximity effect and eddy currents in nearby pours; current maps; a wideband SPICE model. FastHenry's method, built in.</p></div>
   <div class="card"><h4>Switching Loop <span class="badge ok">ready</span></h4><p>Hot-loop and gate-loop inductance of a buck, boost or half-bridge from its layout, the switching edges in time, a snubber designer, an EMI estimate, before/after comparison.</p></div>
   <div class="card"><h4>PDN (AC) <span class="badge ok">ready</span></h4><p>A rail's impedance at each chip against the target, decap table and what-if, plane resonances, the regulator's loop fitted to its datasheet plot, and the rail's droop under load steps.</p></div>
   <div class="card"><h4>Matching &amp; Tolerance <span class="badge ok">ready</span></h4><p>An RF matching network with real parts: corners, Monte Carlo, worst-case search, yield per band, sensitivity and a BOM.</p></div>
@@ -702,6 +705,195 @@ have, and does it see any return copper at all?</dd>
 and the board view marks those pieces red. That is exactly where the loop area, and the noise pickup, is.</dd>
 <dt>Steps</dt><dd>Ports at the sensor connector and the ADC pin, return GND, f max 50 MHz. Extract; look at the red pieces;
 route a GND track alongside or pour under them; compare L.</dd>
+</dl></div>
+
+<h2 id="em3d">3D extraction</h2>
+<p class="lead">Pick pads; get the resistance and inductance of the copper between them as functions of frequency, R(f) and
+L(f), with skin effect, proximity effect and eddy currents in nearby copper, plus the coupling between several such paths and
+a SPICE model that is right at every frequency. It is the method of FastHenry, built in and checked against FastHenry.</p>
+<figure><img src="screenshots/em3d_rlq.png" alt="3D extraction: R, L and Q of a PCB coil against frequency" loading="lazy">
+<figcaption>A 4-turn PCB coil over a ground pour: R rises from 145 mΩ (DC) to 566 mΩ at 100 MHz; L falls from 227 nH to 152 nH
+as eddy currents in the pour push back on the coil's field (the step near 30 kHz).</figcaption></figure>
+
+<h3 id="em3d-how">How it works</h3>
+<svg class="flow" viewBox="0 0 900 150" role="img" aria-label="3D extraction flow">
+  <rect class="box" x="5" y="30" width="150" height="62" rx="8"/><text x="80" y="56" text-anchor="middle">Ports + links</text><text class="sm" x="80" y="76" text-anchor="middle">pad pairs; passive nets</text>
+  <rect class="box" x="185" y="30" width="150" height="62" rx="8"/><text x="260" y="56" text-anchor="middle">3D bars</text><text class="sm" x="260" y="76" text-anchor="middle">tracks, cells, via rings</text>
+  <rect class="boxa" x="365" y="30" width="170" height="62" rx="8"/><text x="450" y="52" text-anchor="middle">Filaments</text><text class="sm" x="450" y="70" text-anchor="middle">graded to the skin depth</text><text class="sm" x="450" y="85" text-anchor="middle">partial L of every pair</text>
+  <rect class="box" x="565" y="30" width="150" height="62" rx="8"/><text x="640" y="56" text-anchor="middle">Reduced model</text><text class="sm" x="640" y="76" text-anchor="middle">exact at DC, passive</text>
+  <rect class="box" x="745" y="30" width="150" height="62" rx="8"/><text x="820" y="56" text-anchor="middle">R, L, Q, k (f)</text><text class="sm" x="820" y="76" text-anchor="middle">maps, SPICE</text>
+  <path class="arr" d="M155,61 H183"/><path class="arr" d="M335,61 H363"/><path class="arr" d="M535,61 H563"/><path class="arr" d="M715,61 H743"/>
+</svg>
+<ol>
+  <li><b>Copper to bars.</b> The copper of the ports' nets and of any nets you tick, inside a window around the ports, becomes
+  straight 3D bars: every track piece at its true width and thickness, pours and pads as a grid of cells (fine near the ports'
+  copper, up to 8x coarser far from it), every via barrel as a ring of six plated bars.</li>
+  <li><b>Filaments.</b> Each bar is split into parallel filaments across its width and through its thickness, thinner towards
+  the edges and faces, down to half the skin depth at the chosen frequency. A filament carries a uniform current; how the
+  current shares between filaments is what the solve finds.</li>
+  <li><b>Partial inductances.</b> Every pair of filaments gets a partial mutual inductance: exact six-fold integrals for short
+  bars side by side, the geometric mean distance of the two cross-sections for longer ones, two filaments on their axes far
+  apart, Neumann's integral for bars at an angle. Each filament has its resistance ρl/A.</li>
+  <li><b>The network.</b> Kirchhoff's voltage law around the meshes of the filament network (two filaments of one bar make a
+  loop, so current can crowd to one side) gives Z(f) at the ports. Floating copper (a passive pour) has its own loops: its eddy
+  currents come out of the same solve.</li>
+  <li><b>Reduced model.</b> Instead of one big solve per frequency, a passive reduced-order model is built (Krylov subspaces at
+  DC and three frequencies). It gives Z at every frequency at once, is exact at DC and has a Foster form: a sum of R-L branches,
+  which is the SPICE model.</li>
+</ol>
+
+<h3 id="em3d-use">Using it</h3>
+<ol>
+  <li><b>Ports</b>: "Add…" (a name, + pads, − pads) or select two pads in the PCB editor and "From KiCad selection". All pads of
+  one side are one node (a part's pins in parallel). The + and − sides must be joined by copper, or by a link.</li>
+  <li><b>Links</b> (optional): ideal shorts between pads, to close a loop through a part: a port at a regulator's output and
+  ground pins plus a link between the load's supply and ground pins measures the whole loop.</li>
+  <li><b>Conductors</b>: tick nearby nets, such as a ground pour, to include their eddy currents. They are taken only inside the
+  window (the ports' pads and tracks plus the margin, or a window you type).</li>
+  <li><b>Options</b>: the frequency range; the pour cell size; the filament limit. <b>Estimate</b> shows the filament count,
+  memory and run time before you run; over the limit the tool narrows the fine band, then uses larger cells, then fewer
+  filaments per track, and says so.</li>
+  <li><b>Analyse</b>. Summary: R and L at DC, mid band and f max, the highest Q, M and k between ports. R, L, Q (f): the curves.
+  Current: the sheet current on each layer at three frequencies; click a track to see the current across its cross-section.
+  SPICE: the wideband model or R, L, K at one frequency. "Save as test…" keeps the setup for the command line.</li>
+</ol>
+<figure><img src="screenshots/em3d_current.png" alt="Current map of the ground pour under a coil at 100 MHz, and a track cross-section" loading="lazy">
+<figcaption>Current tab: the eddy currents in the ground pour under the coil at 100 MHz form a ring under the winding (left);
+the current across one of the coil's tracks crowds to its edges (right).</figcaption></figure>
+
+<h3 id="em3d-calc">Skin-depth explorer</h3>
+<p>Skin depth sets where R starts to rise and how finely the tool cuts the copper. Below, δ against frequency for copper, the
+frequencies where it equals the copper thickness and half of it, and the filament counts the tool would choose for a track
+(the same rule: odd counts, sizes doubling from each face, the face filament at most δ/2).</p>
+<div class="widget" id="w-skin">
+  <div class="ctl">
+    <label>Frequency <span class="v" data-o="kf"></span><input type="range" id="kf" min="3" max="10" step="0.01" value="7"></label>
+    <label>Track width <span class="v" data-o="kw"></span><input type="range" id="kw" min="0.1" max="5" step="0.05" value="0.5"></label>
+    <label>Copper<select id="kt"><option value="17.5">0.5 oz (17.5 µm)</option><option value="35" selected>1 oz (35 µm)</option><option value="48">1 oz + plating (48 µm)</option><option value="70">2 oz (70 µm)</option><option value="105">3 oz (105 µm)</option></select></label>
+  </div>
+  <div class="out" id="ko"></div>
+  <canvas class="plot" id="kplot" aria-label="Skin depth against frequency"></canvas>
+</div>
+<p>Skin effect alone: δ = √(ρ / (π f μ₀)), ρ = 1.72e-8 Ω m. In a coil or a go-and-return pair, proximity effect
+raises R earlier: the 4-turn coil above is already 10 % up at 1 MHz, where δ (66 µm) is twice its copper.</p>
+
+<h3 id="em3d-limits">Limits</h3>
+<div class="limit"><b>What 3D extraction does not model (yet)</b>
+<ul>
+  <li><b>Quasi-static.</b> No radiation and no transmission-line delay: valid while the copper is shorter than about λ/10 (a few
+  hundred MHz across a board). For a line's Z₀ and delay use <a href="#trace">Trace R/L/C</a>.</li>
+  <li><b>No capacitance yet</b>, so no self-resonance of a coil (planned).</li>
+  <li><b>No magnetic materials yet</b>: a ferrite core or shield is not in the model (planned, with a core library).</li>
+  <li><b>Parts are not in the circuit.</b> Only copper is solved; close a loop through a part with a link (an ideal short). The
+  part's own inductance (a shunt's, a capacitor's ESL) is not included.</li>
+  <li><b>Cells.</b> Pads and pours are cells of the chosen size. Copper of one net closer than a cell to other copper of the same
+  net can merge (two pads 0.1 mm apart in one 0.3 mm cell); use smaller cells there. Tracks keep their true shape.</li>
+  <li><b>Size.</b> The matrices are dense: a region (a coil, a converter's power stage, a shunt and its sense lines), not a whole
+  board at fine cells. The tool coarsens to fit its filament limit and warns.</li>
+</ul></div>
+
+<h3 id="em3d-cases">Use cases</h3>
+
+<div class="uc">
+<h4>1. A PCB coil and the ground pour under it</h4>
+<p class="who">NFC antenna, inductive sensor or a small wireless-power coil drawn as tracks on the board.</p>
+<dl>
+<dt>Situation</dt><dd>The coil's L and Q set the matching network (NFC at 13.56 MHz) or the sensor's resonance. A ground pour on
+the other side of the board, poured "for EMI", sits right under the winding.</dd>
+<dt>Why this tool</dt><dd>It gives L, R and Q against frequency from the drawn coil, with the eddy currents in any copper you
+tick. A coil formula cannot see the pour.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Port: + at the outer pad, − at the inner pad. f max 100 MHz. Analyse with the pour's net unticked, then ticked.</li>
+  <li>Compare L and Q at the working frequency in the Summary and the R, L, Q (f) tab. On the Current tab, pick the pour's layer
+  to see where the eddy currents run.</li>
+  <li>Cut the pour back from under the coil (plus a margin of a few mm), refill in KiCad, save, Analyse again.</li>
+</ol></dd>
+<dt>Example</dt><dd>4 turns, 12 mm outside, 0.5 mm track, 0.3 mm gap, 1 oz, on a 1.6 mm board. Alone: 227 nH and 145 mΩ at DC; at
+13.56 MHz L = 221 nH, Q ≈ 72. With a ground pour on the bottom layer under it: L = 153 nH (−31 %) and Q ≈ 49. A matching network
+tuned for the coil alone would be far off.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>2. The AC loss of a pulsed power path</h4>
+<p class="who">DC-DC converter: the input path carries the switch's square current pulses, not DC.</p>
+<dl>
+<dt>Situation</dt><dd>DC &amp; Thermal gives the path's loss from its DC resistance. The current is a 500 kHz square wave with
+harmonics into the tens of MHz, where the copper's R is higher. How much more is the loss?</dd>
+<dt>Why this tool</dt><dd>It gives R(f) of the actual path with its return in the ground pour, so each harmonic is weighted with
+its own R.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Port: + at the source's supply pad, − at its ground pad. Link: the switch's supply pad to its ground pad (closing the loop
+  through the switch). Tick nothing else if the return is the port's own ground net.</li>
+  <li>Analyse; export the CSV and weight the harmonics of your current waveform with R(f), or use the wideband SPICE model in a
+  converter simulation.</li>
+</ol></dd>
+<dt>Example</dt><dd>A 2 mm × 30 mm track (1 oz) over a ground pour: R = 8.7 mΩ at DC, 10.2 mΩ at 500 kHz, 13.5 mΩ at 5 MHz,
+22.4 mΩ at 50 MHz; the loop L falls from 13.0 nH (DC) to 11.2 nH at 5 MHz as the return gathers under the track. For a 0/5 A
+square current at 500 kHz (50 % duty) the DC estimate is 109 mW; with R(f) at each harmonic 121 mW, 11 % more. Modest here; it
+grows with thicker copper and faster, larger pulses.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>3. Magnetic pickup into a current-sense pair</h4>
+<p class="who">Current-mode converter or motor drive: a shunt's sense lines run past the switching loop.</p>
+<dl>
+<dt>Situation</dt><dd>The current-sense signal has spikes at every edge, and the controller trips early or jitters. The
+switching loop's di/dt induces a voltage M·di/dt in the loop formed by the two sense traces.</dd>
+<dt>Why this tool</dt><dd>With two ports it gives the mutual inductance M between the switching loop and the sense loop, so the
+induced voltage is a number, and routing variants can be compared before the board is made.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Port "hot": the switching loop's two ends at the switch (a small gap), or the loop closed with links through the caps.</li>
+  <li>Port "sense": the amplifier's two input pads. Link: the shunt's two pads (the shunt closes the sense loop).</li>
+  <li>Analyse; read M in the coupling table. Induced voltage = M × di/dt (1 A/ns = a 10 A edge in 10 ns). Try a tighter pair, more
+  distance, a ground pour under both.</li>
+</ol></dd>
+<dt>Example</dt><dd>A 10 × 4 mm hot loop (1 mm tracks) and a 12 mm sense pair of 0.15 mm tracks 3 mm away. Pair 1 mm apart:
+M ≈ 0.30 nH, 0.30 V at 1 A/ns, against a sense signal of maybe 50 mV. Pair 0.3 mm apart: 0.11 nH. Pair 1 mm apart but 6 mm
+away: 0.10 nH. Tight and 6 mm away: 0.034 nH, nine times less than the first. A ground pour under both: 0.20 nH at high
+frequency.</dd>
+<dt>Caveat</dt><dd>Only copper is solved: the shunt and the amplifier's pins also close the sense loop, and with their small
+pieces of loop included a hand check reads about 30 % lower. Use the numbers to compare layouts.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>4. Kelvin routing of a current shunt</h4>
+<p class="who">Any board with a low-ohm shunt (1–10 mΩ) measuring a fast current.</p>
+<dl>
+<dt>Situation</dt><dd>A 2 mΩ shunt sees 20 A: 40 mV of signal. Where the sense traces leave the pads, and how they run, decides
+how much of the power loop's flux they enclose.</dd>
+<dt>Why this tool</dt><dd>Two ports, the power path through the shunt and the sense pair, share the shunt as a link: M between
+them is the inductive error at the sense pins, per A/ns.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Port "power": the shunt path from the source to the load end (close it with a link at the load). Port "sense": the
+  amplifier's input pads. Link: the shunt's two pads.</li>
+  <li>Analyse; note M. Move the sense taps (inner pad edges, separate Kelvin pads), route the pair under or away from the power
+  copper, Analyse again; keep the variant with the smallest M.</li>
+</ol></dd>
+<dt>Note</dt><dd>The shunt's own ESL (from its datasheet) adds to the copper's part; the tool gives the layout part.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>5. How current shares in a via array at high frequency</h4>
+<p class="who">Power or return transitions between layers through an array of vias.</p>
+<dl>
+<dt>Situation</dt><dd>At DC every via of an array carries about the same current. At high frequency the current takes the path of
+least inductance: the vias nearest the source and nearest the return carry most of it, and the far ones little.</dd>
+<dt>Why this tool</dt><dd>Via barrels are solved as plated rings with the copper on both layers, so the Current tab shows which
+vias work at which frequency.</dd>
+<dt>Steps</dt><dd>Port across the transition (pads on the two layers), the return net ticked. Look at the Current tab at DC and at
+f max; compare L(f) with the array as drawn and with fewer, or differently placed, vias.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>6. A wideband model of copper for a converter simulation</h4>
+<p class="who">Anyone simulating a power stage in SPICE with real parasitics.</p>
+<dl>
+<dt>Situation</dt><dd>A fixed R and L for a piece of copper is right at one frequency only: too little loss at the ringing
+frequency, or too much inductance at DC.</dd>
+<dt>Why this tool</dt><dd>Its wideband model is a set of parallel R-L branches fitted exactly to the solve: right at DC and at
+every frequency up to f max, plain R and L, any SPICE. With several ports it uses E and F controlled sources.</dd>
+<dt>Steps</dt><dd>Analyse; SPICE tab, "Wideband"; Save subcircuit. Pins are NAME_p and NAME_m per port. Checked in ngspice against
+the solve to 1e-4.</dd>
 </dl></div>
 
 <h2 id="loop">Switching Loop</h2>
@@ -1518,6 +1710,9 @@ zones and save in KiCad first: the tests read the saved board.</p>
 <tr><td>Is the sense resistor's Kelvin tap in the right place?</td><td>DC &amp; Thermal</td><td>V map, ΔV between points</td></tr>
 <tr><td>What field does this current put on a nearby sensor?</td><td>DC &amp; Thermal (magnetic)</td><td>B maps</td></tr>
 <tr><td>What is this trace as a SPICE model? Its Z₀ and delay? Its C to ground?</td><td>Trace R/L/C → SPICE</td><td>.subckt, segment table</td></tr>
+<tr><td>What are my PCB coil's L and Q, and how much does the pour under it cost?</td><td>3D extraction</td><td>L, R, Q against f, current maps</td></tr>
+<tr><td>How much does this copper lose at the switching harmonics, not just at DC?</td><td>3D extraction</td><td>R(f), wideband SPICE</td></tr>
+<tr><td>How much does the switching loop induce into my sense / signal lines?</td><td>3D extraction (two ports)</td><td>M, k; V = M·di/dt</td></tr>
 <tr><td>How big is my converter's hot loop, and where is the inductance?</td><td>Switching Loop</td><td>L loop, breakdown, map</td></tr>
 <tr><td>How much does the switch node overshoot and ring? Do I need a snubber?</td><td>Switching Loop</td><td>edges, snubber tab</td></tr>
 <tr><td>Will the off FET turn on by itself (Miller turn-on)?</td><td>Switching Loop</td><td>other gate peak vs V<sub>th</sub></td></tr>
@@ -1532,7 +1727,7 @@ zones and save in KiCad first: the tests read the saved board.</p>
 </tbody></table>
 
 <h2 id="accuracy">Validation and accuracy</h2>
-<p>Every solver is checked against closed-form results in the test suite (<code>python3 -m pytest tests</code>, 149 tests).</p>
+<p>Every solver is checked against closed-form results in the test suite (<code>python3 -m pytest tests</code>, 179 tests).</p>
 <table>
 <thead><tr><th>Tool</th><th>Check</th><th>Agreement</th></tr></thead>
 <tbody>
@@ -1545,6 +1740,11 @@ zones and save in KiCad first: the tests read the saved board.</p>
 <tr><td rowspan="3">Trace R/L/C</td><td>Microstrip / stripline field solve against Hammerstad–Jensen / Wheeler</td><td>within 1.5 % / 1.6 %</td></tr>
 <tr><td>Pour over a plane: C and L against εA/h and μ₀hl/W; R against DC solver</td><td>within 1 %; within 2 %</td></tr>
 <tr><td>Subcircuit delay in ngspice against the extracted delay</td><td>matches</td></tr>
+<tr><td rowspan="5">3D extraction</td><td>Round-wire skin effect against the exact Bessel solution (up to r/δ = 5)</td><td>within 0.3 %</td></tr>
+<tr><td>Bar self-inductance against Grover; coaxial loops against Maxwell's formula</td><td>within 0.2 %; within 0.15 %</td></tr>
+<tr><td>Hairpin and a 3-turn spiral against FastHenry (same filaments), 1 kHz – 1 GHz</td><td>R, L within 0.1 %; L 0.15 %, R 0.45 %</td></tr>
+<tr><td>Track over a ground pour against the microstrip formula</td><td>within 2.5 %</td></tr>
+<tr><td>Wideband SPICE model in ngspice against the solve</td><td>within 1e-4</td></tr>
 <tr><td rowspan="6">Switching Loop</td><td>Wide strip over a plane against Hammerstad; plane pair against image theory</td><td>0.4 %; 0.5 %</td></tr>
 <tr><td>Copper R against the DC solver</td><td>within 3 %</td></tr>
 <tr><td>Via pair, diagonal narrow track against hand formulas</td><td>within 5 %</td></tr>
@@ -1621,7 +1821,9 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 <ul>
   <li><b>PDN, next step</b>: the line-transient (PSRR) plot, the regulator's remote-sense point.</li>
   <li><b>SI &amp; Fields</b>: 2D cross-section solver for coupled lines and crosstalk, return-current paths, HV field and clearance.</li>
-  <li><b>3D extraction</b> (FastHenry / FastCap) and <b>full-wave</b> (openEMS) export.</li>
+  <li><b>3D extraction, next steps</b>: magnetic cores from a core library (ferrite, iron powder, nanocrystalline), PCB coils and
+  planar magnetics, coupling to a Switching Loop cell, capacitance (FastCap's method) and C to a chassis or heatsink.</li>
+  <li><b>Full-wave</b> (openEMS) export.</li>
 </ul>
 
 <h2 id="glossary">Glossary</h2>
@@ -1795,6 +1997,22 @@ widget(["tw", "tl", "ti", "tc", "tlay", "ta"], function(){
   const xs = [], ys = []; for (let k = 1; k <= 160; k++) { const x = imax * k / 160; xs.push(x); ys.push(ipcRise(x, A, outer)); }
   plot(document.getElementById("tplot"), {x: {min: 0, max: imax, label: "current [A]"}, y: {min: 0, max: Math.min(Math.max(dT * 1.6, 40), 300), label: "rise [K]"},
     series: [{x: xs, y: ys, color: css("--c1")}], vlines: [{x: I, color: css("--c4")}], points: [{x: I, y: Math.min(dT, 299), color: css("--c4")}]});
+});
+
+/* ---------- 3D extraction: skin depth (the tool's rule for filaments) ---------- */
+function skinDepth(f){ return Math.sqrt(RHO / (Math.PI * f * 4e-7 * Math.PI)); }
+function gradeEdge(n, r){ if (n <= 1) return 1; let s = 0; const h = Math.floor(n / 2); for (let j = 0; j < h; j++) s += 2 * Math.pow(r, j); if (n % 2) s += Math.pow(r, h); return 1 / s; }
+function division(dim, d, nmax){ let n = 1; while (n < nmax) { if (gradeEdge(n, 2) * dim <= d / 2) break; n += 2; } return Math.min(n, nmax); }
+widget(["kf", "kw", "kt"], function(){
+  const f = Math.pow(10, val("kf")), w = val("kw") * 1e-3, t = parseFloat(val("kt")) * 1e-6, d = skinDepth(f);
+  show("kf", si(f, "Hz")); show("kw", val("kw").toFixed(2) + " mm");
+  const fT = RHO / (Math.PI * 4e-7 * Math.PI * t * t), fH = RHO / (Math.PI * 4e-7 * Math.PI * t * t / 4);
+  outs("ko", [["Skin depth δ", si(d, "m")], ["Copper / δ", (t / d).toFixed(2)], ["δ = copper at", si(fT, "Hz")], ["δ = copper / 2 at", si(fH, "Hz")],
+    ["Filaments across the track", String(division(w, d, 7))], ["Filaments through the copper", String(division(t, d, 5))]]);
+  const xs = [], ys = []; for (let k = 0; k <= 140; k++) { const x = Math.pow(10, 3 + 7 * k / 140); xs.push(x); ys.push(skinDepth(x) * 1e6); }
+  plot(document.getElementById("kplot"), {x: {min: 1e3, max: 1e10, log: true, label: "frequency [Hz]"}, y: {min: 0.5, max: 3000, log: true, label: "skin depth [µm]"},
+    series: [{x: xs, y: ys, color: css("--c1")}], hlines: [{y: t * 1e6, color: css("--c2")}, {y: t * 5e5, color: css("--c3")}],
+    vlines: [{x: f, color: css("--c4")}], points: [{x: f, y: d * 1e6, color: css("--c4")}]});
 });
 
 /* ---------- 2. microstrip (Hammerstad-Jensen, zero thickness) ---------- */
