@@ -155,3 +155,45 @@ def test_coarse_cells_do_not_short_coil_turns():
         assert R[0] == pytest.approx(out[0][0][0], rel=1e-3)
         assert L[0, 0] == pytest.approx(out[0][1][0, 0], rel=1e-3)
     assert out[0][0][0] == pytest.approx(1.72e-8 * 147.2e-3 / (0.5e-3 * 35e-6), rel=0.03)
+
+
+def plane_case(port=("ms", ["P1.1"], ["G1.1"]), **kw):
+    items = (seg((0, 0), (20, 0), 0.5, "A") + smd("P1", (0, 0), "A", (0.6, 0.6)) + zone("G", "B.Cu", -10, -10, 35, 10)
+             + smd("G1", (0, 1.5), "G", (0.6, 0.6), layer="B.Cu") + smd("R1", (20, 0), "A", (0.6, 0.6))
+             + smd("R2", (20, 0), "G", (0.6, 0.6), layer="B.Cu"))
+    b = board(items, outline=(-12, -12, 40, 12))
+    s = pcb.Setup(nets=["G"], ports=[pcb.Port(*port)], links=[[["R1.1"], ["R2.1"]]] if port[0] == "ms" else [],
+                  f_max=1e8, **kw)
+    return b, ST.from_board(b), s
+
+
+def test_passive_pour_does_not_widen_the_window():
+    """A ground pour much larger than the path is cut to the ports' pads and tracks plus the margin,
+    also when it is the port's return (it once made the window the whole board: 50 000 bars)."""
+    b, st, s = plane_case(margin=2.0)
+    assert pcb.auto_window(b, s) == pytest.approx([-2.3, -2.3, 22.3, 3.8], abs=0.15)
+    b, st, s = plane_case(port=("t", ["P1.1"], ["R1.1"]), margin=2.0)        # the pour passive
+    assert pcb.auto_window(b, s) == pytest.approx([-2.3, -2.3, 22.3, 2.3], abs=0.15)
+
+
+def test_over_the_filament_limit_coarsens_the_far_pour_not_the_path():
+    b, st, s = plane_case(port=("t", ["P1.1"], ["R1.1"]), pitch=0.3, margin=3.0)
+    full = pcb.estimate(b, st, s)
+    s.max_fils = int(full["filaments"] * 0.6)
+    e = pcb.estimate(b, st, s)
+    assert e["filaments"] <= s.max_fils and e["warnings"]
+    s2 = pcb.Setup.from_dict(s.to_dict())
+    s2.nets = []
+    r1, r2 = A.run(b, st, s), A.run(b, st, s2)
+    # the passive pour carries no DC current, and the path's own pads keep their cells: R_dc unchanged
+    assert r1.dc()[0][0] == pytest.approx(r2.dc()[0][0], rel=2e-3)
+    assert r1.L[-1, 0, 0] < 0.9 * r2.L[-1, 0, 0]          # eddy currents in the pour at 100 MHz
+
+
+def test_quadtree_blocks_up_to_eight():
+    from pcb_current_sim.loop.peec import quadtree_sizes
+    want = np.full((16, 16), 8)
+    want[0, 0] = 1
+    size = quadtree_sizes(want)
+    assert size[0, 0] == 1 and size[1, 1] == 1 and size[2, 2] == 2 and size[0, 4] == 4 and size[8, 8] == 8 and size[0, 8] == 8
+    assert (quadtree_sizes(np.full((6, 5), 4)) == 4).all()

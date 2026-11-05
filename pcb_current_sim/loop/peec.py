@@ -232,15 +232,15 @@ def _cells_of(geom, grid, ok, pos):
 
 
 def quadtree_sizes(want):
-    """Cell sizes (1, 2 or 4 fine cells) from wanted sizes per fine cell, as aligned blocks: a 4 x 4
-    tile is one block if every cell in it may be coarse, else its 2 x 2 sub-tiles likewise."""
+    """Cell sizes (1, 2, 4 or 8 fine cells) from wanted sizes per fine cell, as aligned blocks: an
+    8 x 8 tile is one block if every cell in it may be that coarse, else its 4 x 4 sub-tiles
+    likewise, and so on (Switching Loop asks for at most 4; the 3D extraction's far pour 8)."""
     ny, nx = want.shape
-    py, px = -ny % 4, -nx % 4
-    w = np.pad(want, ((0, py), (0, px)), constant_values=4)
-    t4 = w.reshape(w.shape[0] // 4, 4, w.shape[1] // 4, 4).min(axis=(1, 3))
-    t2 = w.reshape(w.shape[0] // 2, 2, w.shape[1] // 2, 2).min(axis=(1, 3))
-    size = np.where(np.repeat(np.repeat(t2 >= 2, 2, 0), 2, 1), 2, 1)
-    size = np.where(np.repeat(np.repeat(t4 >= 4, 4, 0), 4, 1), 4, size)
+    w = np.pad(want, ((0, -ny % 8), (0, -nx % 8)), constant_values=8)
+    size = np.ones(w.shape, np.int64)
+    for s in (2, 4, 8):
+        t = w.reshape(w.shape[0] // s, s, w.shape[1] // s, s).min(axis=(1, 3))
+        size = np.where(np.repeat(np.repeat(t >= s, s, 0), s, 1), s, size)
     return size[:ny, :nx]
 
 
@@ -250,7 +250,7 @@ def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25
 
     terminals: {name: [board pad indices]} - each is one equipotential node (a device pin: all its
     pads, on every layer).  Raises ValueError if a terminal has no copper in the window.
-    level: None (uniform) or a function (X, Y) mm -> wanted cell size in fine cells (1, 2 or 4).
+    level: None (uniform) or a function (X, Y) mm -> wanted cell size in fine cells (1, 2, 4 or 8).
     The copper is rasterised at `pitch` everywhere (connectivity is decided there); coarse cells are
     aligned blocks of fine cells of one net, and the bars between two blocks are the sum of their
     shared fine faces, running between the blocks' centres.
@@ -294,9 +294,9 @@ def build(board, stackup, nets, window, pitch, terminals, rho=RHO_CU, t_plate=25
         size = np.ones(grid.shape, np.int64)
     else:
         Xc, Yc = grid.centres()
-        size = quadtree_sizes(np.clip(np.asarray(level(Xc, Yc), np.int64), 1, 4))
+        size = quadtree_sizes(np.clip(np.asarray(level(Xc, Yc), np.int64), 1, 8))
     sz = size[cj, ci]
-    bkey = ((lay_of * 64 + net_of) * 8 + sz) * (grid.ny + 4) * (grid.nx + 4) + (cj // sz) * (grid.nx + 4) + ci // sz
+    bkey = ((lay_of * 64 + net_of) * 16 + sz) * (grid.ny + 4) * (grid.nx + 4) + (cj // sz) * (grid.nx + 4) + ci // sz
     _, blk_of = np.unique(bkey, return_inverse=True)
     blk_rep = np.full(blk_of.max() + 1, n_cells, np.int64)
     np.minimum.at(blk_rep, blk_of, np.arange(n_cells))

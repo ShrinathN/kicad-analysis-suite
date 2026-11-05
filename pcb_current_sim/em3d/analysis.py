@@ -34,6 +34,8 @@ class Result:
     bars: dict = field(default_factory=dict)    # drawing data per mesh bar (see _bars)
     fils: dict = field(default_factory=dict)    # per filament: seg, bar, w, h, offsets in the bar
     warnings: list = field(default_factory=list)
+    pitch: float = None               # pour / pad cell size used [mm]
+    fine_mm: float = None             # adaptive: fine cells within this of the ports' copper [mm]
 
     @property
     def R(self):
@@ -78,6 +80,7 @@ def run(board, stackup, s, progress=lambda m: None):
     f = np.geomspace(s.f_min, s.f_max, max(2, int(s.points)))
     Z = model.Z(f)
     res = Result(list(sysm.names), f, Z, model, built.window, built.n_fils, 0.0, warnings=list(built.warnings))
+    res.pitch, res.fine_mm = built.pitch, built.fine_mm
     res.f_show = [float(x) for x in (s.f_min, math.sqrt(s.f_min * s.f_max), s.f_max)]
     nseg = len(built.geom.segs)
     seg_bar = built.bar_of_seg

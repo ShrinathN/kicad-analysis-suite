@@ -34,7 +34,15 @@ OPTS = (("f_min", "f min [Hz]", "si", "Lowest frequency of the results (DC is al
          "Cell size of pours and pads (tracks keep their true width). Smaller: finer current maps in pours, "
          "more filaments"),
         ("margin", "Margin around the copper [mm]", float,
-         "The window: copper of the ticked nets within this distance of the ports' copper is included"),
+         "The automatic window is the ports' and links' nets' copper plus this margin; other ticked nets are "
+         "included only inside it"),
+        ("window", "Window x0, y0, x1, y1 [mm] (blank = auto)", "box",
+         "The region solved, in board coordinates (as KiCad shows them). Blank: the ports' copper plus the "
+         "margin. A smaller window solves faster"),
+        ("fine_mm", "Fine cells within [mm] (blank = auto)", "float?",
+         "With adaptive cells: pour cells stay at the cell size within this distance of the ports' and links' "
+         "copper and double at 2x, 4x, 8x it. Blank: twice the thickest dielectric (the return current spreads "
+         "over a few heights); narrowed automatically to fit the filament limit"),
         ("n_width", "Filaments across a track (max)", int,
          "Most filaments across a track's width (graded towards the edges); fewer when the skin depth allows"),
         ("n_height", "Filaments through a track (max)", int,
@@ -256,8 +264,21 @@ class Em3dFrame(wx.Frame):
             self.fields[key] = (t, kind)
             g.AddMany([(wx.StaticText(obox, label=label), 0, wx.ALIGN_CENTER_VERTICAL), (t, 0)])
         ob.Add(g, 0, wx.ALL, 4)
+        self.adaptive = wx.CheckBox(obox, label="Adaptive cells (coarser away from the ports' copper)")
+        self.adaptive.SetToolTip("Pour cells are fine near the ports' copper, where the current and its return "
+                                 "concentrate, and up to 8x coarser far from it. Off: one cell size everywhere")
+        ob.Add(self.adaptive, 0, wx.ALL, 4)
         self.skin = wx.StaticText(obox, label="")
         ob.Add(self.skin, 0, wx.ALL, 4)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.est_b = wx.Button(obox, label="Estimate", style=wx.BU_EXACTFIT)
+        self.est_b.SetToolTip("Mesh the copper without solving: the filament count, memory and a rough run time "
+                              "(cells are coarsened automatically to fit the filament limit)")
+        self.est_b.Bind(wx.EVT_BUTTON, lambda e: self._estimate())
+        row.Add(self.est_b, 0, wx.ALL, 2)
+        ob.Add(row, 0)
+        self.est = wx.StaticText(obox, label="")
+        ob.Add(self.est, 0, wx.ALL | wx.EXPAND, 4)
         for k in ("f_max", "f_disc"):
             self.fields[k][0].Bind(wx.EVT_TEXT, lambda e: self._skin())
         ls.Add(ob, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
@@ -410,10 +431,15 @@ class Em3dFrame(wx.Frame):
             self.nets.Check(k, n in forced or n in checked)
         for key, (t, kind) in self.fields.items():
             v = getattr(self.s, key)
-            if kind in ("si", "si?"):
-                t.ChangeValue("" if v is None else fmt_si(v, "").strip())
+            if v is None:
+                t.ChangeValue("")
+            elif kind == "box":
+                t.ChangeValue(", ".join(f"{x:g}" for x in v))
+            elif kind in ("si", "si?"):
+                t.ChangeValue(fmt_si(v, "").strip())
             else:
                 t.ChangeValue(f"{v:g}")
+        self.adaptive.SetValue(bool(self.s.adaptive))
         self._skin()
         refit(self.left)
 
@@ -425,8 +451,15 @@ class Em3dFrame(wx.Frame):
         for key, (t, kind) in self.fields.items():
             txt = t.GetValue().strip()
             try:
-                if kind == "si?" and not txt:
+                if kind in ("si?", "float?", "box") and not txt:
                     v = None
+                elif kind == "box":
+                    v = [float(x) for x in txt.replace(";", ",").split(",")]
+                    if len(v) != 4 or v[2] <= v[0] or v[3] <= v[1]:
+                        raise ValueError
+                    v = [min(v[0], v[2]), min(v[1], v[3]), max(v[0], v[2]), max(v[1], v[3])]
+                elif kind == "float?":
+                    v = float(txt)
                 elif kind in ("si", "si?"):
                     v = parse_si(txt)
                 elif kind is int:
@@ -444,10 +477,42 @@ class Em3dFrame(wx.Frame):
                 wx.MessageBox("Check the options: 0 < f min < f max, a positive cell size, at least one filament.",
                               "Options", parent=self)
             return False
+        if s.fine_mm is not None and s.fine_mm <= 0:
+            s.fine_mm = None
+        s.adaptive = self.adaptive.GetValue()
         forced = set(self._port_nets())
         s.nets = [n for n in self._checked_nets() if n not in forced]
         self.s = s
         return True
+
+    def _estimate(self):
+        if not self.s.ports:
+            return wx.MessageBox("Add a port first.", "Estimate", parent=self)
+        if not self._from_ui():
+            return
+        board, st, s = self.board, self.session.stackup, pcb.Setup.from_dict(self.s.to_dict())
+        self.est.SetLabel("Meshing…")
+        self.est_b.Disable()
+
+        def work():
+            try:
+                e = pcb.estimate(board, st, s)
+                w = e["window"]
+                text = (f"≈ {e['filaments']:,} filaments, {e['gb']:.1f} GB, ~{max(1, e['seconds']):.0f} s\n"
+                        f"window {w[0]:.1f}, {w[1]:.1f}, {w[2]:.1f}, {w[3]:.1f} ({w[2] - w[0]:.0f} x {w[3] - w[1]:.0f} mm)\n"
+                        f"cells {e['pitch']:g} mm" + (f", fine within {e['fine_mm']:.2g} mm" if e["fine_mm"] else ""))
+                if e["warnings"]:
+                    text += "\n" + "\n".join("• " + x for x in e["warnings"])
+            except (ValueError, MemoryError) as ex:
+                text = str(ex)
+            wx.CallAfter(self._estimated, text)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _estimated(self, text):
+        self.est_b.Enable()
+        self.est.SetLabel(text)
+        self.est.Wrap(max(200, self.left.GetClientSize().width - 40))
+        refit(self.left)
 
     def _skin(self):
         try:
@@ -625,6 +690,8 @@ class Em3dFrame(wx.Frame):
         lines = [f"{r.n_fils} filaments; window x {r.window[0]:.1f} … {r.window[2]:.1f}, "
                  f"y {r.window[1]:.1f} … {r.window[3]:.1f} mm; {r.seconds:.1f} s; wideband model of order "
                  f"{r.model.order} (exact at DC, passive).",
+                 f"Pour / pad cells {r.pitch:g} mm" + (f", fine within {r.fine_mm:.2g} mm of the ports' copper and "
+                                                      "coarser further out." if r.fine_mm else "."),
                  f"mid = {fmt_si(r.f[mid], 'Hz')}, top = {fmt_si(r.f[-1], 'Hz')}.", ""]
         for q, n in enumerate(r.names):
             ratio = r.R[-1, q] / Rdc[q]
