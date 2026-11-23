@@ -26,6 +26,13 @@ flux through filament k is μ0 ∫ M · H_k dV = μ0 G_k · m, so the core adds
 to the filaments' partial inductance matrix: symmetric, positive, and for a real constant χ just
 added to L (the reduced model, SPICE and maps are unchanged).
 
+Lossy, frequency-dependent materials (`Material`: a Debye relaxation χ(f) = χ0 / (1 + j f/f_r))
+make K/χ(s) = K/χ0 + s τ K/χ0 = A0 + s A1 linear in s.  `Core.modes` projects the core on a
+rational Krylov space of (A0 + s_j A1)⁻¹ G (G compressed to its numerical range first) and
+diagonalises the small pencil (A1, A0): ΔZ(s) = s μ0 Σ h_k h_kᵀ / (1 + s ν_k), a plain inductance
+per mode with ν = 0 and a parallel R-L per mode with ν > 0.  `system.System(core=...)` adds those
+as passive branches, so the reduced model and its SPICE forms carry the core loss.
+
 The charge integrals: ∫∫ 1/r between pieces (cells, boundary faces) by Gauss quadrature over one
 piece of the other's exact potential (closed forms F3: ∂x∂y∂z F3 = 1/r, F2: ∂x∂y F2 = 1/r), far
 pairs as point charges; equal relative geometries computed once.
@@ -114,17 +121,46 @@ def _edges(bounds, h, fine=()):
 
 
 @dataclass
+class Material:
+    """A linear magnetic material: initial permeability mu_r and, optionally, a first-order
+    (Debye) relaxation at f_r [Hz]:
+
+        χ(f) = (mu_r - 1) / (1 + j f / f_r)       (μ = μ' - j μ'', e^{jωt})
+
+    so μ'' peaks at f_r with μ' halved there: the usual first fit to a ferrite's μ', μ'' plot
+    (Snoek roll-off).  f_r None: no dispersion, no loss."""
+    name: str = "core"
+    mu_r: float = 1000.0
+    f_r: float = None
+
+    @property
+    def chi0(self):
+        return float(self.mu_r) - 1.0
+
+    @property
+    def tau(self):
+        return 0.0 if not self.f_r else 1.0 / (2 * math.pi * float(self.f_r))
+
+    def chi(self, f):
+        return self.chi0 / (1.0 + 2j * math.pi * np.asarray(f, float) * self.tau)
+
+
+@dataclass
 class Grid:
-    """Occupied cells of a tensor-product grid; chi per cell (μr - 1, real)."""
+    """Occupied cells of a tensor-product grid; chi per cell (μr - 1, real, static) and tau per
+    cell (the Debye relaxation time [s], 0 = no dispersion)."""
     ex: np.ndarray
     ey: np.ndarray
     ez: np.ndarray
     chi: np.ndarray                   # (nx, ny, nz), 0 where empty
     occ: np.ndarray = field(default=None)
+    tau: np.ndarray = field(default=None)
 
     def __post_init__(self):
         if self.occ is None:
             self.occ = self.chi > 0
+        if self.tau is None:
+            self.tau = np.zeros(self.chi.shape)
 
     @property
     def shape(self):
@@ -136,8 +172,8 @@ class Grid:
 
 
 def grid_from_boxes(boxes, h, refine=()):
-    """boxes: [(lo (3,), hi (3,), chi)], metres.  Later boxes override earlier ones (an air gap
-    is a box with chi 0 inside a core box).  h: largest cell size; refine: [(lo, hi, h_fine)]
+    """boxes: [(lo (3,), hi (3,), chi or Material)], metres.  Later boxes override earlier ones
+    (an air gap is a box with chi 0 inside a core box).  h: largest cell size; refine: [(lo, hi, h_fine)]
     boxes where the cells are at most h_fine (the grid is a tensor product: the refinement spans
     the core along the other axes)."""
     E = []
@@ -150,10 +186,14 @@ def grid_from_boxes(boxes, h, refine=()):
     cx, cy, cz = [(e[:-1] + e[1:]) / 2 for e in E]
     X, Y, Z = np.meshgrid(cx, cy, cz, indexing="ij")
     chi = np.zeros(X.shape)
+    tau = np.zeros(X.shape)
     for lo, hi, c in boxes:
         m = (X > lo[0]) & (X < hi[0]) & (Y > lo[1]) & (Y < hi[1]) & (Z > lo[2]) & (Z < hi[2])
-        chi[m] = c
-    return Grid(E[0], E[1], E[2], chi)
+        if isinstance(c, Material):
+            chi[m], tau[m] = c.chi0, c.tau
+        else:
+            chi[m], tau[m] = float(c), 0.0
+    return Grid(E[0], E[1], E[2], chi, tau=tau)
 
 
 # ---- assembly ----------------------------------------------------------------------------
@@ -172,6 +212,7 @@ class Core:
         self.cell_lo = np.column_stack([g.ex[ii], g.ey[jj], g.ez[kk]])
         self.cell_hi = np.column_stack([g.ex[ii + 1], g.ey[jj + 1], g.ez[kk + 1]])
         self.cell_chi = g.chi[occ]
+        self.cell_tau = g.tau[occ]
         self.cell_ijk = np.column_stack([ii, jj, kk])
         nc = len(ii)
         # DOFs: faces with an occupied cell on either side; per DOF: axis, plane index, (j, k)
@@ -255,12 +296,74 @@ class Core:
         self.P = (self.P + self.P.T) / 2
 
     def K(self, chi_cell=None):
-        """Mass matrix divided by each cell's χ (dense)."""
+        """Mass matrix divided by each cell's χ (dense; complex χ gives a complex matrix)."""
         r, c, v, cell = self.Kcell
-        chi = self.cell_chi if chi_cell is None else chi_cell
-        K = np.zeros((self.n_dof, self.n_dof))
-        np.add.at(K, (r, c), v / chi[cell])
+        chi = self.cell_chi if chi_cell is None else np.asarray(chi_cell)
+        w = v / chi[cell]
+        K = np.zeros((self.n_dof, self.n_dof), w.dtype)
+        np.add.at(K, (r, c), w)
         return K
+
+    @property
+    def dispersive(self):
+        return bool((self.cell_tau > 0).any())
+
+    def A0(self):
+        """K/χ0 + P: the static system (symmetric positive definite)."""
+        A = self.K() + self.P
+        return (A + A.T) / 2
+
+    def A1(self):
+        """τ K/χ0 (zero rows for cells without dispersion): K/χ(s) = K/χ0 + s A1 for Debye cells."""
+        w = np.where(self.cell_tau > 0, self.cell_chi / np.where(self.cell_tau > 0, self.cell_tau, 1.0), np.inf)
+        return self.K(w)
+
+    def delta_L_at(self, G, f):
+        """ΔL(f) (B x B, complex) by a direct solve with each cell's χ(f): the reference for
+        `modes` (one dense complex factorisation per frequency)."""
+        chi = self.cell_chi / (1.0 + 2j * math.pi * f * self.cell_tau)
+        X = linalg.solve(self.K(chi) + self.P.astype(complex), G.astype(complex), assume_a="sym")
+        return MU0 * G.T @ X
+
+    def modes(self, F=None, G=None, f_max=None, tol=1e-6, progress=lambda m: None):
+        """The core's response as modes (see `Modes`): G compressed to its range (randomised,
+        relative tol), the core projected on the rational Krylov space (A0 + s_j A1)⁻¹ G at s = 0
+        (the static response, exact) and, for dispersive cells, at s_j from 0.1/τ to 10 χ0/τ (a
+        high-χ core's response stays geometry-limited until |χ(f)| falls to a few, far above
+        f_r), then the small pencil (A1, A0) diagonalised.  Passive by construction (congruence)."""
+        if G is None:
+            progress("Coil field in the core...")
+            G = self.field_matrix(F)
+        Qg = _range(G, tol)
+        A0 = self.A0()
+        pts = [0.0]
+        A1 = None
+        if self.dispersive:
+            A1 = self.A1()
+            tau = self.cell_tau[self.cell_tau > 0]
+            s_lo = 0.1 / tau.max()
+            s_hi = 10.0 * (self.cell_chi[self.cell_tau > 0] / tau).max()
+            if f_max:
+                s_hi = min(s_hi, 10 * 2 * math.pi * f_max)
+            n = max(2, int(math.ceil(math.log10(max(s_hi / s_lo, 10.0)) / KRYLOV_DECADES)) + 1)
+            pts += list(np.geomspace(s_lo, max(s_hi, 10 * s_lo), n))
+        blocks = []
+        for k, s in enumerate(pts):
+            progress(f"Core response {k + 1}/{len(pts)}...")
+            fac = linalg.cho_factor(A0 if s == 0 else A0 + s * A1, check_finite=False)
+            blocks.append(linalg.cho_solve(fac, Qg, check_finite=False))
+        V = _basis(np.hstack(blocks))
+        A0r = V.T @ A0 @ V
+        Gr = V.T @ G
+        if A1 is None:
+            nu, U = np.zeros(V.shape[1]), np.linalg.inv(np.linalg.cholesky((A0r + A0r.T) / 2)).T
+        else:
+            A1r = V.T @ A1 @ V
+            nu, U = linalg.eigh((A1r + A1r.T) / 2, (A0r + A0r.T) / 2)
+        h = U.T @ Gr
+        w = (h * h).sum(axis=1)
+        keep = w > 1e-14 * w.sum()
+        return Modes(np.maximum(nu[keep], 0.0), h[keep])
 
     # -- ∫∫ 1/r between pieces ------------------------------------------------------------
     def _coulomb(self):
@@ -354,6 +457,62 @@ class Core:
         X = linalg.cho_solve(linalg.cho_factor((A + A.T) / 2, check_finite=False), G, check_finite=False)
         dL = MU0 * G.T @ X
         return (dL + dL.T) / 2
+
+
+@dataclass
+class Modes:
+    """A core's response to the filaments as modes: ΔZ(s) = s μ0 Σ_k h_k h_kᵀ / (1 + s ν_k),
+    i.e. ΔL(f) = μ0 hᵀ diag(1 / (1 + jω ν)) h (B x B).  A mode with ν = 0 is a plain added
+    inductance; one with ν > 0 a parallel R-L (L = μ0, R = μ0 / ν, coupled to the filaments
+    through h_k): its loss is the core loss of a Debye material."""
+    nu: np.ndarray                    # (k,) [s]
+    h: np.ndarray                     # (k, B)
+
+    def delta_L(self, f):
+        g = 1.0 / (1.0 + 2j * math.pi * float(f) * self.nu)
+        return MU0 * (self.h.T * g) @ self.h
+
+    @property
+    def static(self):
+        """Modes that are plain inductance (ν = 0, or below 1e-9 of the largest ν)."""
+        return self.nu <= 1e-9 * max(self.nu.max(initial=0.0), 1e-300)
+
+
+KRYLOV_DECADES = 2.0                  # spacing of the dispersive expansion points [decades]
+
+
+def _range(G, tol, block=64, seed=0):
+    """Orthonormal basis of G's numerical range (randomised range finder): columns are added in
+    blocks until a fresh Gaussian probe leaves less than tol of G's Frobenius norm."""
+    n, B = G.shape
+    nrm = np.linalg.norm(G)
+    if nrm == 0:
+        return np.zeros((n, 0))
+    rng = np.random.default_rng(seed)
+    Q = np.zeros((n, 0))
+    while Q.shape[1] < min(n, B):
+        Y = G @ rng.standard_normal((B, block))
+        for _ in range(2):
+            Y = Y - Q @ (Q.T @ Y)
+        res = np.linalg.norm(Y) / math.sqrt(block)
+        Qy, Ry = np.linalg.qr(Y)
+        Qy = Qy[:, np.abs(np.diag(Ry)) > 1e-12 * nrm]
+        Q = np.hstack([Q, Qy])
+        if res <= tol * nrm or not Qy.shape[1]:
+            break
+    return Q
+
+
+def _basis(W, drop=1e-10):
+    """Orthonormal basis of W's columns (each scaled to unit norm first: blocks solved at
+    different s differ in size), pivoted QR, dependent columns dropped."""
+    n = np.linalg.norm(W, axis=0)
+    W = W[:, n > 0] / n[n > 0]
+    Qw, Rw, _ = linalg.qr(W, mode="economic", pivoting=True)
+    d = np.abs(np.diag(Rw))
+    Qw = Qw[:, d > drop * d[0]]
+    Qw, _ = np.linalg.qr(Qw)                             # a second pass for orthogonality
+    return Qw
 
 
 def _pair_integral(lo_a, hi_a, kind_a, lo_b, hi_b, kind_b):

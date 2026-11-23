@@ -197,3 +197,31 @@ def test_quadtree_blocks_up_to_eight():
     size = quadtree_sizes(want)
     assert size[0, 0] == 1 and size[1, 1] == 1 and size[2, 2] == 2 and size[0, 4] == 4 and size[8, 8] == 8 and size[0, 8] == 8
     assert (quadtree_sizes(np.full((6, 5), 4)) == 4).all()
+
+
+def test_coil_under_a_ferrite_sheet():
+    """A KiCad spiral with a ferrite sheet 0.8 mm above it: the sheet raises L (below the x 2 of a
+    one-sided half-space), a lossy sheet keeps the static L and adds R near its f_r and its μ rolls
+    off above, an air-gap box cuts the sheet, the setup's cores survive a round trip."""
+    turns, outer, w, gap = 2, 6.0, 0.5, 0.3
+    items = coil_items(spiral_points(turns, outer, w, gap), w)
+    port = [("coil", ["P1.1"], ["P2.1"])]
+    kw = dict(f_min=1e3, f_max=1e8, pitch=0.4, n_width=2, n_height=1, core_cell=0.5)
+    sheet = pcb.CoreBox("sheet", [-1.0, -1.0, 0.8], [7.0, 7.0, 1.3], 200.0)
+    lossy = pcb.CoreBox("sheet", sheet.lo, sheet.hi, 200.0, 1e6)
+    slot = pcb.CoreBox("slot", [2.5, -1.0, 0.8], [3.5, 7.0, 1.3], 1.0)
+    air = run(items, port, ["C"], **kw)
+    r = run(items, port, ["C"], cores=[sheet], **kw)
+    assert r.core["cells"] > 100 and r.core["fine_mm"] < r.core["cell_mm"] and not r.core["dispersive"]
+    L_air, L_core = air.dc()[1][0, 0], r.dc()[1][0, 0]
+    assert 1.2 < L_core / L_air < 2.0
+    rl = run(items, port, ["C"], cores=[lossy], **kw)
+    assert rl.core["dispersive"]
+    assert rl.dc()[1][0, 0] == pytest.approx(L_core, rel=1e-4)
+    k = np.argmin(abs(rl.f - 1e6))
+    assert rl.R[k, 0] > 1.08 * air.R[k, 0]                             # core loss at f_r
+    assert rl.L[-1, 0, 0] < L_air + 0.3 * (L_core - L_air)            # μ rolled off at 100 MHz
+    rs = run(items, port, ["C"], cores=[sheet, slot], **kw)
+    assert L_air < rs.dc()[1][0, 0] < L_core
+    s2 = pcb.Setup.from_dict(pcb.Setup(cores=[lossy, slot]).to_dict())
+    assert [c.to_dict() for c in s2.cores] == [lossy.to_dict(), slot.to_dict()]

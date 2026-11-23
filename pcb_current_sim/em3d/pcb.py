@@ -48,6 +48,36 @@ class Port:
 
 
 @dataclass
+class CoreBox:
+    """A box of magnetic material: board x, y [mm] (y down) and z [mm] above the top copper's
+    surface (negative: inside or below the board).  mu_r 1 makes an air gap: it cuts the boxes
+    listed before it.  f_r [Hz]: the material's Debye relaxation (None: lossless, constant μ)."""
+    name: str = "core"
+    lo: list = (0.0, 0.0, 0.0)
+    hi: list = (1.0, 1.0, 1.0)
+    mu_r: float = 1000.0
+    f_r: float = None
+
+    def to_dict(self):
+        return dict(name=self.name, lo=[float(v) for v in self.lo], hi=[float(v) for v in self.hi],
+                    mu_r=float(self.mu_r), f_r=None if self.f_r is None else float(self.f_r))
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(d.get("name", "core"), list(d.get("lo", (0, 0, 0))), list(d.get("hi", (1, 1, 1))),
+                   float(d.get("mu_r", 1000.0)), d.get("f_r"))
+
+    def metres(self):
+        lo, hi = np.minimum(self.lo, self.hi), np.maximum(self.lo, self.hi)
+        return np.asarray(lo, float) * 1e-3, np.asarray(hi, float) * 1e-3
+
+
+CORE_CELLS = 2500                     # core cells aimed at (dense: ~3-4k fit in this PC's memory)
+CORE_CELL_MAX = 1.0                   # mm: largest core cell
+CORE_CELL_MIN = 0.1                   # mm: smallest (refined near windings)
+
+
+@dataclass
 class Setup:
     nets: list = field(default_factory=list)          # conductors (ports' nets + passive ones)
     ports: list = field(default_factory=list)         # Port
@@ -65,19 +95,23 @@ class Setup:
     adaptive: bool = True                             # coarser cells away from the ports' copper
     fine_mm: float = None                             # fine cells within this of it (None: 2 x the thickest dielectric, >= 1 mm)
     points: int = 61                                  # frequencies in the results
+    cores: list = field(default_factory=list)         # CoreBox (magnetic material)
+    core_cell: float = None                           # mm: core cell size (None: automatic)
 
     def to_dict(self):
         d = {k: getattr(self, k) for k in self.__dataclass_fields__}
         d["ports"] = [p.to_dict() for p in self.ports]
+        d["cores"] = [c.to_dict() for c in self.cores]
         return d
 
     @classmethod
     def from_dict(cls, d):
         s = cls()
         for k in s.__dataclass_fields__:
-            if k in d and k != "ports":
+            if k in d and k not in ("ports", "cores"):
                 setattr(s, k, d[k])
         s.ports = [Port.from_dict(p) for p in d.get("ports", [])]
+        s.cores = [CoreBox.from_dict(c) for c in d.get("cores", [])]
         s.links = [[list(a), list(b)] for a, b in d.get("links", [])]
         return s
 
@@ -308,3 +342,71 @@ def _geometry(mesh, f_disc, nw_max, nh_max, np_max, ports, links, level=None):
     for ta, tb in links:
         g.join(anchors[T[ta]], anchors[T[tb]])
     return g, np.array(bar_of_seg, int), nf
+
+
+def core_model(s, F, progress=lambda m: None):
+    """(magnetic.Core or None, info, warnings) for the setup's core boxes.  F: the filaments.
+
+    Cells: s.core_cell, else the size that gives about CORE_CELLS cells over the material's volume
+    (CORE_CELL_MIN..CORE_CELL_MAX).  Where filaments come within two cells of a core box, the part
+    of the box near them gets cells of half that distance (a 0.5 mm cell 0.5 mm under a coil read
+    the core's L 5 % high); the grid is a tensor product, so the refinement spans the box along
+    the other axes.  Automatic cells that come out over 1.5 x CORE_CELLS are made coarser."""
+    from . import magnetic as Mg
+    if not any(c.mu_r > 1 for c in s.cores):
+        return None, {}, []
+    warns = []
+    boxes, mats = [], []
+    for c in s.cores:
+        lo, hi = c.metres()
+        if np.any(hi - lo <= 0):
+            warns.append(f"Core box {c.name} has no volume: left out.")
+            continue
+        if c.mu_r > 1:
+            boxes.append((lo, hi, Mg.Material(c.name, c.mu_r, c.f_r)))
+            mats.append((lo, hi))
+        else:
+            boxes.append((lo, hi, 0.0))
+    if not mats:
+        return None, {}, warns
+    vol = sum(float(np.prod(hi - lo)) for lo, hi in mats)
+    auto = not s.core_cell
+    h = (float(s.core_cell) * 1e-3 if not auto
+         else float(np.clip((vol / CORE_CELLS) ** (1 / 3), CORE_CELL_MIN * 1e-3, CORE_CELL_MAX * 1e-3)))
+    pts = np.vstack([F.c0, F.c0 + F.u * F.l[:, None], F.c0 + F.u * F.l[:, None] / 2])
+    near = []
+    for lo, hi in mats:
+        d = np.linalg.norm(np.maximum(0.0, np.maximum(lo - pts, pts - hi)), axis=1)
+        if not len(d):
+            continue
+        if d.min() <= 0:
+            warns.append("Copper lies inside a core box: the core's field there is approximate.")
+        close = d < 2 * h
+        if close.any():
+            dmin = max(float(d[close].min()), 0.0)
+            q = pts[close]
+            r_lo = np.maximum(lo, q.min(axis=0) - 2 * h)
+            r_hi = np.minimum(hi, q.max(axis=0) + 2 * h)
+            if np.all(r_hi > r_lo):
+                near.append((r_lo, r_hi, max(CORE_CELL_MIN * 1e-3, h / 4, dmin / 2)))
+    scale = 1.0
+    for _ in range(12):
+        refine = [(a, b, min(h, hf * scale)) for a, b, hf in near]
+        grid = Mg.grid_from_boxes(boxes, h, refine)
+        if not auto or grid.n_cells <= 1.5 * CORE_CELLS:
+            break
+        h *= 1.2
+        scale *= 1.2
+    else:
+        warns.append(f"The core needs {grid.n_cells} cells even with {h * 1e3:.2g} mm cells.")
+    if auto and scale > 1:
+        warns.append(f"Core cells made coarser to fit ({h * 1e3:.2g} mm, {min([h] + [hf * scale for *_, hf in near]) * 1e3:.2g} mm "
+                     f"near the copper): the core's L may read a few % off. Set the core cell size to choose.")
+    if not grid.n_cells:
+        return None, {}, warns + ["The core boxes hold no cells (all cut by gaps?)."]
+    progress(f"Core mesh: {grid.n_cells} cells...")
+    core = Mg.Core(grid, progress)
+    info = dict(cells=grid.n_cells, dofs=core.n_dof, cell_mm=h * 1e3,
+                fine_mm=min([h] + [min(h, hf * scale) for *_, hf in near]) * 1e3,
+                dispersive=core.dispersive)
+    return core, info, warns

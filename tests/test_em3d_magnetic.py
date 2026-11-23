@@ -192,3 +192,71 @@ def test_ungapped_ring_inductance_scales_with_permeability():
     assert L[1e4] / L[1e3] == pytest.approx(10.0, rel=0.06)
     # magnetic-circuit estimate μ0 μr N² A / l_mean (l_mean 32 mm): the same order
     assert 0.8 < L[1e3] / (MU0 * 1e3 * 100 * 6e-6 / 32e-3) < 1.4
+
+
+# ---- frequency-dependent (Debye) cores ---------------------------------------------------
+def _spiral_over_plate(material, cell=0.75e-3):
+    g = SH.square_spiral(3, 8e-3, 0.5e-3, 0.3e-3, 35e-6, nw=3, nh=1, z=0.3e-3)
+    gr = Mg.grid_from_boxes([(A([-1.5e-3, -1.5e-3, -1e-3]), A([9.5e-3, 9.5e-3, 0.0]), material)], cell)
+    return g, Mg.Core(gr)
+
+
+def test_debye_material():
+    m = Mg.Material("x", 2001.0, 1e6)
+    assert m.chi(0) == pytest.approx(2000.0)
+    c = m.chi(1e6)                                   # at f_r: μ' halved, μ'' = μ'
+    assert c.real == pytest.approx(1000.0) and c.imag == pytest.approx(-1000.0)
+    assert Mg.Material("y", 500.0).chi(1e9) == pytest.approx(499.0)
+
+
+@pytest.mark.parametrize("material", [Mg.Material("static", 2000.0), Mg.Material("MnZn", 2000.0, 1e6)])
+def test_core_modes_match_direct_solves(material):
+    g, core = _spiral_over_plate(material)
+    G = core.field_matrix(g.filaments()[0])
+    M = core.modes(G=G)
+    assert M.static.all() == (material.f_r is None)
+    for f in (0.0, 3e5, 1e6, 1e7, 1e8):
+        D = core.delta_L_at(G, f)
+        assert np.abs(M.delta_L(f) - D).max() < 1e-6 * np.abs(D).max()
+
+
+def test_system_with_dispersive_core_direct_and_reduced():
+    g, core = _spiral_over_plate(Mg.Material("MnZn", 2000.0, 1e6))
+    sy = S.System(g, core=core)
+    assert sy.Rq.shape[0] > sy.nq                    # the dispersive modes are unknowns
+    red = sy.reduce(1e3, 1e9)
+    air = S.System(g)
+    F = g.filaments()[0]
+    L0, G = K.inductance_matrix(F), core.field_matrix(F)
+    for f in (1e3, 1e6, 1e7, 1e9):
+        QL = np.asarray(air.Q.T @ (L0 + core.delta_L_at(G, f)))
+        Lq = np.asarray((air.Q.T @ QL.T).T)
+        Y = air.E.T @ np.linalg.solve(air.Rq + 2j * np.pi * f * Lq, air.E)
+        ref = 1 / Y[0, 0]
+        assert sy.direct(f)[0][0, 0] == pytest.approx(ref, rel=1e-5)
+        assert red.Z(f)[0, 0, 0] == pytest.approx(ref, rel=1e-5)
+    Z0, Zr = air.direct(1e6)[0][0, 0], sy.direct(1e6)[0][0, 0]
+    assert Zr.imag > 1.5 * Z0.imag and Zr.real > 2 * Z0.real      # more L, and core loss
+    I = sy.currents(sy.direct(1e6)[1], [1.0])
+    assert I.shape == (len(F),)
+
+
+def test_closed_core_loss_tangent_follows_the_material():
+    """Ungapped high-μ ring: L_core ∝ μ(f), so R_core / (ω L_core) → μ''/μ' = f / f_r (Debye).
+    The air-leakage share does not scale with μ, so a μr 1000 ring reads a little lower
+    (0.93 at f_r; 0.993 at 1e4, 0.999 at 1e5)."""
+    air = S.System(_winding())
+    tan = {}
+    for mu in (1e3, 1e4):
+        mat = Mg.Material("MnZn", mu, 1e6)
+        core = Mg.Core(Mg.grid_from_boxes([_box(lo, hi, mat) for lo, hi in RING], 1e-3))
+        sy = S.System(_winding(), core=core)
+        Ls = (sy.direct(1.0)[0][0, 0] - air.direct(1.0)[0][0, 0]).imag / (2 * np.pi)
+        for f in (3e5, 1e6):
+            dZ = sy.direct(f)[0][0, 0] - air.direct(f)[0][0, 0]
+            tan[mu, f] = dZ.real / dZ.imag
+            if mu == 1e4:
+                assert abs(dZ) / (2 * np.pi * f) == pytest.approx(Ls * abs(mat.chi(f)) / mat.chi0, rel=0.02)
+    assert tan[1e4, 3e5] == pytest.approx(0.3, rel=0.02)
+    assert tan[1e4, 1e6] == pytest.approx(1.0, rel=0.02)
+    assert 0.85 < tan[1e3, 1e6] < tan[1e4, 1e6]

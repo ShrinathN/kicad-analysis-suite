@@ -32,8 +32,17 @@ def dense_bytes(B, n):
     return int(8 * (B * B + B * n + 2 * n * n))
 
 
+MU0 = 4e-7 * math.pi
+
+
 class System:
-    def __init__(self, geom, progress=lambda m: None):
+    """core: an optional `magnetic.Core` (one grid holding every core of the problem: cores
+    interact).  Its response is added as modes (`magnetic.Modes`): plain inductance into L_q,
+    and each dispersive (Debye) mode as an extra unknown, a parallel R-L branch coupled to the
+    meshes, so R_q, L_q stay symmetric positive (semi)definite and `direct`, `reduce` and the
+    Foster form are unchanged.  The first `nq` unknowns are the mesh / port currents."""
+
+    def __init__(self, geom, progress=lambda m: None, core=None, f_max=None):
         self.geom = geom
         F, R, a, b, seg = geom.filaments()
         self.fils, self.R, self.a, self.b, self.seg = F, R, a, b, seg
@@ -88,6 +97,46 @@ class System:
         self.Rq = np.asarray((self.Q.T @ sp.diags(R) @ self.Q).todense())
         self.E = np.zeros((n, p))
         self.E[m + np.arange(p), np.arange(p)] = 1.0
+        self.nq = n
+        self.modes = None
+        if core is not None:
+            progress("Coil field in the core...")
+            Gq = np.asarray((self.Q.T @ core.field_matrix(F).T).T)     # dof x meshes
+            self.modes = core.modes(G=Gq, f_max=f_max, progress=progress)          # h: modes x meshes
+            self._add_core(self.modes)
+
+    def _add_core(self, M):
+        n = self.nq
+        Hq = M.h
+        st = M.static
+        if st.any():
+            Hs = Hq[st]
+            self.Lq = self.Lq + MU0 * Hs.T @ Hs
+        Hd, nu = Hq[~st], M.nu[~st]
+        kd = len(nu)
+        if not kd:
+            return
+        # mode branch: L = μ0, R = μ0/ν, current y in the inductor; scaled y = c y' so its R block
+        # is the meshes' typical R (conditioning only: a congruence)
+        Rk = MU0 / nu
+        r0 = float(np.mean(np.diag(self.Rq)))
+        c = np.sqrt(r0 / Rk)
+        N = n + kd
+        need, have = dense_bytes(0, N) * 2, available_ram()
+        if need > MEM_SHARE * have:
+            raise ValueError(f"The core adds {kd} unknowns: {need / 2 ** 30:.1f} GB needed, "
+                             f"{have / 2 ** 30:.1f} GB free. Use larger core cells or fewer filaments.")
+        Ra = np.zeros((N, N))
+        Ra[:n, :n] = self.Rq + (Hd.T * Rk) @ Hd
+        Ra[:n, n:] = -(Hd.T * (Rk * c))
+        Ra[n:, :n] = Ra[:n, n:].T
+        Ra[n:, n:] = np.diag(Rk * c * c)
+        La = np.zeros((N, N))
+        La[:n, :n] = self.Lq
+        La[n:, n:] = np.diag(MU0 * c * c)
+        Ea = np.zeros((N, self.p))
+        Ea[:n] = self.E
+        self.Rq, self.Lq, self.E = Ra, La, Ea
 
     @property
     def n_filaments(self):
@@ -105,7 +154,7 @@ class System:
 
     def currents(self, X, i_port):
         """Filament currents [A] for port currents i_port (X from direct)."""
-        return self.Q @ (X @ np.asarray(i_port, complex))
+        return self.Q @ (X[:self.nq] @ np.asarray(i_port, complex))
 
     def currents_reduced(self, model, f, i_port):
         """Filament currents [A] at f for port currents i_port, from the reduced model (its
@@ -114,7 +163,7 @@ class System:
         Zp = model.Z(f)[0]
         v = Zp @ np.asarray(i_port, complex)
         xr = linalg.solve(model.Rr + s * model.Lr, model.Er @ v)
-        return self.Q @ (model.V @ xr)
+        return self.Q @ (model.V @ xr)[:self.nq]
 
     # -- reduced model ----------------------------------------------------------------
     def reduce(self, f_min, f_max, tol=1e-5, max_blocks=60, progress=lambda m: None):

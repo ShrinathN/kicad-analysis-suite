@@ -36,6 +36,7 @@ class Result:
     warnings: list = field(default_factory=list)
     pitch: float = None               # pour / pad cell size used [mm]
     fine_mm: float = None             # adaptive: fine cells within this of the ports' copper [mm]
+    core: dict = field(default_factory=dict)    # core mesh: cells, dofs, cell_mm, fine_mm, dispersive, modes
 
     @property
     def R(self):
@@ -73,13 +74,19 @@ class Result:
 def run(board, stackup, s, progress=lambda m: None):
     t0 = time.time()
     built = pcb.build(board, stackup, s, progress)
+    core, cinfo, cwarn = (None, {}, [])
+    if s.cores:
+        core, cinfo, cwarn = pcb.core_model(s, built.geom.filaments()[0], progress)
     progress(f"{built.n_fils} filaments: building the network...")
-    sysm = system.System(built.geom, progress)
+    sysm = system.System(built.geom, progress, core=core, f_max=s.f_max)
+    if sysm.modes is not None:
+        cinfo["modes"] = int(len(sysm.modes.nu))
     progress("Wideband model...")
     model = sysm.reduce(s.f_min, s.f_max, progress=progress)
     f = np.geomspace(s.f_min, s.f_max, max(2, int(s.points)))
     Z = model.Z(f)
-    res = Result(list(sysm.names), f, Z, model, built.window, built.n_fils, 0.0, warnings=list(built.warnings))
+    res = Result(list(sysm.names), f, Z, model, built.window, built.n_fils, 0.0, warnings=list(built.warnings) + cwarn)
+    res.core = cinfo
     res.pitch, res.fine_mm = built.pitch, built.fine_mm
     res.f_show = [float(x) for x in (s.f_min, math.sqrt(s.f_min * s.f_max), s.f_max)]
     nseg = len(built.geom.segs)
