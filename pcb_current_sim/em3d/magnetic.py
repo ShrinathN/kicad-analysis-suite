@@ -304,7 +304,7 @@ class Core:
         nc = len(self.cell_V)
         B = len(F)
         G = np.zeros((self.n_dof, B))
-        eps2 = (0.2235 * (F.w + F.h)) ** 2
+        eps2 = (0.25 * (F.w + F.h)) ** 2               # the round wire of about the bar's size
         mid = F.c0 + F.u * F.l[:, None] / 2
         lock = __import__("threading").Lock()
 
@@ -399,12 +399,18 @@ def _pair_integral(lo_a, hi_a, kind_a, lo_b, hi_b, kind_b):
     return out
 
 
-def _seg_field(P, A, u, l, eps2):
-    """H [A/m per A] at points P of straight filaments from A along unit u, length l (broadcast),
-    regularised by eps² (the filament's own size)."""
+def _seg_field(P, A, u, l, a2):
+    """H [A/m per A] at points P of straight filaments from A along unit u, length l (broadcast).
+
+    Exact Biot-Savart outside the radius a (a² = a2, the filament's own size); inside it the field
+    of a round wire, scaled by ρ²/a².  The field must stay curl-free in the core: a regularised
+    kernel 1/(ρ² + ε²) is the field of a current smeared over all space, which couples to flux
+    circulating inside the core (no magnetic charge, held back only by K/χ), so the error grows
+    with χ: a μr 1e4 plate read 4 % above the half-space bound, 0.963 of it with this field."""
     d = P - A
     s = np.einsum("...k,...k->...", d, u)
     rp = d - s[..., None] * u
-    rho2 = np.einsum("...k,...k->...", rp, rp) + eps2
-    t = (l - s) / np.sqrt((l - s) ** 2 + rho2) + s / np.sqrt(s * s + rho2)
-    return np.cross(u, rp) * (t / (4 * math.pi * rho2))[..., None]
+    rho2 = np.einsum("...k,...k->...", rp, rp)
+    tiny = 1e-30 + 1e-18 * a2
+    t = (l - s) / np.sqrt((l - s) ** 2 + rho2 + tiny) + s / np.sqrt(s * s + rho2 + tiny)
+    return np.cross(u, rp) * (t / (4 * math.pi * np.maximum(rho2, a2)))[..., None]
