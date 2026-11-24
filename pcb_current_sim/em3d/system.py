@@ -33,6 +33,8 @@ def dense_bytes(B, n):
 
 
 MU0 = 4e-7 * math.pi
+CORE_TOL = 1e-2       # compression of the core coupling (G Q): port Z within ~1e-6 (second order), 7x faster
+                      # than 1e-6 on a coil over a ferrite sheet (2560 modes instead of 6480)
 
 
 class System:
@@ -102,7 +104,7 @@ class System:
         if core is not None:
             progress("Coil field in the core...")
             Gq = np.asarray((self.Q.T @ core.field_matrix(F).T).T)     # dof x meshes
-            self.modes = core.modes(G=Gq, f_max=f_max, progress=progress)          # h: modes x meshes
+            self.modes = core.modes(G=Gq, f_max=f_max, tol=CORE_TOL, progress=progress)          # h: modes x meshes
             self._add_core(self.modes)
 
     def _add_core(self, M):

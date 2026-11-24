@@ -95,7 +95,7 @@ class Setup:
     adaptive: bool = True                             # coarser cells away from the ports' copper
     fine_mm: float = None                             # fine cells within this of it (None: 2 x the thickest dielectric, >= 1 mm)
     points: int = 61                                  # frequencies in the results
-    cores: list = field(default_factory=list)         # CoreBox (magnetic material)
+    cores: list = field(default_factory=list)         # cores.CoreSpec (or raw CoreBox)
     core_cell: float = None                           # mm: core cell size (None: automatic)
 
     def to_dict(self):
@@ -111,7 +111,8 @@ class Setup:
             if k in d and k not in ("ports", "cores"):
                 setattr(s, k, d[k])
         s.ports = [Port.from_dict(p) for p in d.get("ports", [])]
-        s.cores = [CoreBox.from_dict(c) for c in d.get("cores", [])]
+        from .cores import CoreSpec
+        s.cores = [CoreSpec.from_dict(c) for c in d.get("cores", [])]
         s.links = [[list(a), list(b)] for a, b in d.get("links", [])]
         return s
 
@@ -344,20 +345,35 @@ def _geometry(mesh, f_disc, nw_max, nh_max, np_max, ports, links, level=None):
     return g, np.array(bar_of_seg, int), nf
 
 
-def core_model(s, F, progress=lambda m: None):
-    """(magnetic.Core or None, info, warnings) for the setup's core boxes.  F: the filaments.
+def core_boxes(s, board, stackup, materials=None):
+    """([CoreBox], warnings): the setup's cores expanded (`cores.expand`); raw CoreBox kept."""
+    from . import cores as CR
+    out, warns = [], []
+    for c in s.cores:
+        if isinstance(c, CoreBox):
+            out.append(c)
+            continue
+        boxes, w = CR.expand(c, board, stackup, materials)
+        out += boxes
+        warns += w
+    return out, warns
 
-    Cells: s.core_cell, else the size that gives about CORE_CELLS cells over the material's volume
-    (CORE_CELL_MIN..CORE_CELL_MAX).  Where filaments come within two cells of a core box, the part
+
+def core_model(s, F, board=None, stackup=None, materials=None, progress=lambda m: None):
+    """(magnetic.Core or None, info, warnings) for the setup's cores.  F: the filaments.
+
+    Cells: s.core_cell everywhere (no refinement), else the size that gives about CORE_CELLS cells
+    over the material's volume (CORE_CELL_MIN..CORE_CELL_MAX), and where filaments come within two
+    cells of a core box, the part
     of the box near them gets cells of half that distance (a 0.5 mm cell 0.5 mm under a coil read
     the core's L 5 % high); the grid is a tensor product, so the refinement spans the box along
     the other axes.  Automatic cells that come out over 1.5 x CORE_CELLS are made coarser."""
     from . import magnetic as Mg
-    if not any(c.mu_r > 1 for c in s.cores):
-        return None, {}, []
-    warns = []
+    cbs, warns = core_boxes(s, board, stackup, materials)
+    if not any(c.mu_r > 1 for c in cbs):
+        return None, {}, warns
     boxes, mats = [], []
-    for c in s.cores:
+    for c in cbs:
         lo, hi = c.metres()
         if np.any(hi - lo <= 0):
             warns.append(f"Core box {c.name} has no volume: left out.")
@@ -382,7 +398,7 @@ def core_model(s, F, progress=lambda m: None):
         if d.min() <= 0:
             warns.append("Copper lies inside a core box: the core's field there is approximate.")
         close = d < 2 * h
-        if close.any():
+        if auto and close.any():
             dmin = max(float(d[close].min()), 0.0)
             q = pts[close]
             r_lo = np.maximum(lo, q.min(axis=0) - 2 * h)

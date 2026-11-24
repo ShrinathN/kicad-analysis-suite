@@ -546,27 +546,44 @@ def _pad_geom(p, shape, cx, cy, sx, sy, angle):
 
 
 def _outline(root):
+    """Closed Edge.Cuts loops: board graphics plus footprints' Edge.Cuts shapes (KiCad cuts
+    those too: slots and cut-outs drawn in a footprint, e.g. for a planar core's legs)."""
     chains, loops = [], []
-    for g in root[1:]:
-        if not isinstance(g, list) or str(value(g, "layer", "")) != "Edge.Cuts":
-            continue
-        k = g[0]
-        if k == "gr_line":
-            chains.append([floats(g, "start"), floats(g, "end")])
-        elif k == "gr_arc":
-            chains.append(arc_points(floats(g, "start"), floats(g, "mid"), floats(g, "end")))
-        elif k == "gr_rect":
-            (x0, y0), (x1, y1) = floats(g, "start"), floats(g, "end")
-            loops.append([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
-        elif k == "gr_circle":
-            c, e = floats(g, "center"), floats(g, "end")
-            r = math.dist(c, e)
-            loops.append([(c[0] + r * math.cos(t), c[1] + r * math.sin(t))
-                          for t in np.linspace(0, 2 * math.pi, 73)[:-1]])
-        elif k == "gr_poly":
-            pts = pts_of(g)
-            if len(pts) >= 3:
-                loops.append(pts)
+
+    def shapes(items, pre, tf):
+        for g in items:
+            if not isinstance(g, list) or str(value(g, "layer", "")) != "Edge.Cuts":
+                continue
+            k = g[0]
+            if k == pre + "line":
+                chains.append([tf(floats(g, "start")), tf(floats(g, "end"))])
+            elif k == pre + "arc":
+                chains.append([tf(q) for q in arc_points(floats(g, "start"), floats(g, "mid"), floats(g, "end"))])
+            elif k == pre + "rect":
+                (x0, y0), (x1, y1) = floats(g, "start"), floats(g, "end")
+                loops.append([tf(q) for q in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))])
+            elif k == pre + "circle":
+                c, e = floats(g, "center"), floats(g, "end")
+                r = math.dist(c, e)
+                loops.append([tf((c[0] + r * math.cos(t), c[1] + r * math.sin(t)))
+                              for t in np.linspace(0, 2 * math.pi, 73)[:-1]])
+            elif k == pre + "poly":
+                pts = pts_of(g)
+                if len(pts) >= 3:
+                    loops.append([tf(q) for q in pts])
+
+    shapes(root[1:], "gr_", lambda q: q)
+    for fp in findall(root, "footprint"):
+        fat = find(fp, "at")
+        fx, fy = float(fat[1]), float(fat[2])
+        fa = float(fat[3]) if len(fat) > 3 and not isinstance(fat[3], list) else 0.0
+
+        def tf(q, fx=fx, fy=fy, fa=fa):
+            if q is None:
+                return None
+            dx, dy = rot(q[0], q[1], fa)
+            return (fx + dx, fy + dy)
+        shapes(fp[1:], "fp_", tf)
     # chain open pieces into closed loops
     tol = 1e-3
     chains = [list(c) for c in chains if c and c[0] is not None]

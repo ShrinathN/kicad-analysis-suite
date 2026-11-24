@@ -1,4 +1,5 @@
-"""3D extraction (wx): ports between pads, R(f) / L(f) / Q / coupling, current maps, wideband SPICE."""
+"""3D extraction (wx): ports between pads, magnetic cores, R(f) / L(f) / Q / coupling, current maps,
+wideband SPICE."""
 import csv
 import math
 import threading
@@ -18,9 +19,11 @@ from matplotlib.figure import Figure  # noqa: E402
 from .. import elements as EL  # noqa: E402
 from .. import scenario as SC  # noqa: E402
 from ..em3d import analysis as A  # noqa: E402
+from ..em3d import materials as MT  # noqa: E402
 from ..em3d import pcb  # noqa: E402
 from ..em3d import spice as SP  # noqa: E402
 from ..suite.library import fmt_si, parse_si  # noqa: E402
+from .cores import CoreDialog, MaterialsDialog, core_text, draw_cores  # noqa: E402
 from .crossprobe import CrossProbe, selected_rows  # noqa: E402
 from .layout import AutoList, refit, scrolled  # noqa: E402
 from .suite import attach_suite_menu  # noqa: E402
@@ -52,7 +55,10 @@ OPTS = (("f_min", "f min [Hz]", "si", "Lowest frequency of the results (DC is al
         ("max_fils", "Filament limit", int,
          "Upper limit on the filament count: above it the filaments per track are reduced (with a warning). "
          "Memory grows as the square: about 5 GB at 12000"),
-        ("points", "Frequency points", int, "Frequencies in the results (log spaced, f min to f max)"))
+        ("points", "Frequency points", int, "Frequencies in the results (log spaced, f min to f max)"),
+        ("core_cell", "Core cell [mm] (blank = auto)", "float?",
+         "Cell size of the magnetic cores everywhere. Blank: about 2500 cells over the core's volume, finer where "
+         "copper comes close to it, coarser (with a warning) to fit the memory. Dense: ~3-4k cells fit in 20 GB"))
 PORT_COLS = (("Port", 70), ("+ pads", 150), ("− pads", 150), ("Nets", 160))
 SUM_COLS = ("Port", "R dc [mΩ]", "L dc [nH]", "R mid [mΩ]", "L mid [nH]", "R top [mΩ]", "L top [nH]",
             "R top / R dc", "Q max", "at [Hz]")
@@ -135,6 +141,7 @@ class Em3dFrame(wx.Frame):
         super().__init__(None, title="3D extraction - PCB analysis suite", size=(1500, 960))
         self.session, self.board = session, session.board
         self.s, self.res, self._running = pcb.Setup(), None, False
+        self.materials = MT.Library(MT.path_for(session.library.path))
         self._load()
         self._build()
         attach_suite_menu(self, session, "extract3d")
@@ -144,6 +151,8 @@ class Em3dFrame(wx.Frame):
                                                  for q in self.s.ports[i].plus + self.s.ports[i].minus])
         self.probe.watch(self.llist, lambda lc: [ref(q) for i in selected_rows(lc) if i < len(self.s.links)
                                                  for q in self.s.links[i][0] + self.s.links[i][1]])
+        self.probe.watch(self.corelist, lambda lc: [self.s.cores[i].ref for i in selected_rows(lc)
+                                                    if i < len(self.s.cores) and self.s.cores[i].ref])
         session.listen(self._on_session)
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self._to_ui()
@@ -254,6 +263,31 @@ class Em3dFrame(wx.Frame):
         nb_.Add(self.nets, 1, wx.EXPAND | wx.ALL, 4)
         ls.Add(nb_, 0, wx.EXPAND | wx.ALL, 6)
 
+        cb = wx.StaticBoxSizer(wx.VERTICAL, left, "Magnetic cores")
+        cbox = cb.GetStaticBox()
+        self.corelist = AutoList(cbox, style=wx.LC_REPORT | wx.BORDER_SUNKEN, size=(-1, 90))
+        for k, (t, w) in enumerate((("Core", 70), ("Shape", 110), ("Material", 150), ("Position", 120),
+                                    ("Gaps", 70), ("", 30))):
+            self.corelist.InsertColumn(k, t, width=w)
+        self.corelist.SetToolTip("Ferrite plates and sheets, E cores through slots, rods, toroids: their permeability "
+                                 "(and its loss from the material's f_r) is part of the solve. Double-click to edit")
+        self.corelist.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._core_edit())
+        cb.Add(self.corelist, 1, wx.EXPAND | wx.ALL, 4)
+        row = wx.WrapSizer()
+        for text, fn, tip in (("Add…", self._core_add, "Add a core: shape and size, material, placement"),
+                              ("Edit…", self._core_edit, "Edit the selected core"),
+                              ("Remove", self._core_del, "Remove the selected cores"),
+                              ("On / off", self._core_toggle, "Leave the selected cores out of the solve, or back in"),
+                              ("Materials…", self._core_materials,
+                               "The magnetic material library: built-in classes and your grades (fit to datasheet "
+                               "μ', μ'' points)")):
+            b = wx.Button(cbox, label=text, style=wx.BU_EXACTFIT)
+            b.SetToolTip(tip)
+            b.Bind(wx.EVT_BUTTON, lambda e, f=fn: f())
+            row.Add(b, 0, wx.ALL, 2)
+        cb.Add(row, 0)
+        ls.Add(cb, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+
         ob = wx.StaticBoxSizer(wx.VERTICAL, left, "Options")
         obox = ob.GetStaticBox()
         g = wx.FlexGridSizer(0, 2, 4, 6)
@@ -291,9 +325,10 @@ class Em3dFrame(wx.Frame):
         ls.Add(add_button(left, self, self.test_setup), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
         ls.Add(wx.StaticText(left, label=(
             "Quasi-static 3D: copper cut into filaments (FastHenry's method),\n"
-            "so skin and proximity effect come out of the solve. Valid while\n"
-            "the copper is shorter than about λ/10 (no radiation, no C yet).\n"
-            "No magnetic materials yet. Save the board in KiCad first.")), 0, wx.ALL, 6)
+            "so skin and proximity effect come out of the solve; cores as\n"
+            "magnetisation cells (linear μ, loss from a one-relaxation fit).\n"
+            "Valid while the copper is shorter than about λ/10 (no radiation,\n"
+            "no C yet). No DC bias or core loss vs B yet. Save the board first.")), 0, wx.ALL, 6)
         left.SetSizer(ls)
         left.FitInside()
 
@@ -440,6 +475,9 @@ class Em3dFrame(wx.Frame):
             else:
                 t.ChangeValue(f"{v:g}")
         self.adaptive.SetValue(bool(self.s.adaptive))
+        self.corelist.DeleteAllItems()
+        for c in self.s.cores:
+            self.corelist.Append(core_text(c, self.materials))
         self._skin()
         refit(self.left)
 
@@ -620,6 +658,63 @@ class Em3dFrame(wx.Frame):
         if ids:
             self._link_add([ids[0]], [ids[1]])
 
+    # ------------------------------------------------------------- cores
+    def _core_dialog(self, spec=None):
+        with CoreDialog(self, self.board, self.session.stackup, self.materials, spec) as d:
+            if d.ShowModal() == wx.ID_OK:
+                return d.spec
+        return None
+
+    def _core_add(self):
+        self._from_ui(quiet=True)
+        names = {c.name for c in self.s.cores}
+        n = 1
+        while f"core{n}" in names:
+            n += 1
+        from ..em3d import cores as CR
+        sp = CR.CoreSpec(f"core{n}")
+        if self.s.ports and self.board.pads:          # start near the first port's pads
+            idx = {p.id: p for p in self.board.pads}
+            q = [idx[i].pos for i in self.s.ports[0].plus + self.s.ports[0].minus if i in idx]
+            if q:
+                sp.x, sp.y = (float(round(v, 1)) for v in np.mean(q, axis=0))
+        c = self._core_dialog(sp)
+        if c:
+            self.s.cores.append(c)
+            self._changed()
+
+    def _core_edit(self):
+        k = self.corelist.GetFirstSelected()
+        if k < 0 or k >= len(self.s.cores):
+            return
+        self._from_ui(quiet=True)
+        c = self._core_dialog(self.s.cores[k])
+        if c:
+            self.s.cores[k] = c
+            self._changed()
+
+    def _core_del(self):
+        sel = selected_rows(self.corelist)
+        if sel:
+            self._from_ui(quiet=True)
+            for k in sorted(sel, reverse=True):
+                del self.s.cores[k]
+            self._changed()
+
+    def _core_toggle(self):
+        sel = selected_rows(self.corelist)
+        if sel:
+            self._from_ui(quiet=True)
+            for k in sel:
+                if hasattr(self.s.cores[k], "enabled"):
+                    self.s.cores[k].enabled = not self.s.cores[k].enabled
+            self._changed()
+
+    def _core_materials(self):
+        with MaterialsDialog(self, self.materials) as d:
+            d.ShowModal()
+        self._to_ui()
+
     def _changed(self):
         self._to_ui()
         self.save()
@@ -648,7 +743,7 @@ class Em3dFrame(wx.Frame):
 
         def work():
             try:
-                r = A.run(board, st, s, progress=lambda m: wx.CallAfter(self._status, m))
+                r = A.run(board, st, s, progress=lambda m: wx.CallAfter(self._status, m), materials=self.materials)
                 wx.CallAfter(self._done, r, None)
             except (ValueError, MemoryError) as e:
                 wx.CallAfter(self._done, None, str(e))
@@ -693,6 +788,13 @@ class Em3dFrame(wx.Frame):
                  f"Pour / pad cells {r.pitch:g} mm" + (f", fine within {r.fine_mm:.2g} mm of the ports' copper and "
                                                       "coarser further out." if r.fine_mm else "."),
                  f"mid = {fmt_si(r.f[mid], 'Hz')}, top = {fmt_si(r.f[-1], 'Hz')}.", ""]
+        if r.core:
+            c = r.core
+            lines.insert(-1, f"Cores: {c['cells']} cells of {c['cell_mm']:.2g} mm"
+                         + (f" ({c['fine_mm']:.2g} mm near the copper)" if c["fine_mm"] < c["cell_mm"] else "")
+                         + f", {c.get('modes', 0)} modes"
+                         + (", lossy (the material's f_r): core loss is in R" if c["dispersive"] else ", lossless")
+                         + ".")
         for q, n in enumerate(r.names):
             ratio = r.R[-1, q] / Rdc[q]
             lines.append(f"{n}: R rises {ratio:.2g}x from DC to {fmt_si(r.f[-1], 'Hz')} (skin and proximity "
@@ -792,6 +894,11 @@ class Em3dFrame(wx.Frame):
                     if q in pads:
                         ax.annotate(f"{port.name}{sign}", pads[q].pos, color="c", fontsize=8, weight="bold",
                                     xytext=(4, 4), textcoords="offset points")
+        try:
+            boxes, _ = pcb.core_boxes(self.s, self.board, self.session.stackup, self.materials)
+            draw_cores(ax, boxes)
+        except ValueError:
+            pass
         w = r.window
         ax.set_xlim(w[0], w[2])
         ax.set_ylim(w[3], w[1])

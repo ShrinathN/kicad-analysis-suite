@@ -207,12 +207,13 @@ def test_coil_under_a_ferrite_sheet():
     items = coil_items(spiral_points(turns, outer, w, gap), w)
     port = [("coil", ["P1.1"], ["P2.1"])]
     kw = dict(f_min=1e3, f_max=1e8, pitch=0.4, n_width=2, n_height=1, core_cell=0.5)
+    from pcb_current_sim.em3d import cores as CR
     sheet = pcb.CoreBox("sheet", [-1.0, -1.0, 0.8], [7.0, 7.0, 1.3], 200.0)
-    lossy = pcb.CoreBox("sheet", sheet.lo, sheet.hi, 200.0, 1e6)
+    lossy = CR.CoreSpec("sheet", "plate", dict(L=8.0, W=8.0, T=0.5), "", 200.0, 1e6, x=3.0, y=3.0, gap_z=0.8)
     slot = pcb.CoreBox("slot", [2.5, -1.0, 0.8], [3.5, 7.0, 1.3], 1.0)
     air = run(items, port, ["C"], **kw)
     r = run(items, port, ["C"], cores=[sheet], **kw)
-    assert r.core["cells"] > 100 and r.core["fine_mm"] < r.core["cell_mm"] and not r.core["dispersive"]
+    assert r.core["cells"] > 100 and r.core["fine_mm"] == r.core["cell_mm"] == 0.5 and not r.core["dispersive"]
     L_air, L_core = air.dc()[1][0, 0], r.dc()[1][0, 0]
     assert 1.2 < L_core / L_air < 2.0
     rl = run(items, port, ["C"], cores=[lossy], **kw)
@@ -224,4 +225,5 @@ def test_coil_under_a_ferrite_sheet():
     rs = run(items, port, ["C"], cores=[sheet, slot], **kw)
     assert L_air < rs.dc()[1][0, 0] < L_core
     s2 = pcb.Setup.from_dict(pcb.Setup(cores=[lossy, slot]).to_dict())
-    assert [c.to_dict() for c in s2.cores] == [lossy.to_dict(), slot.to_dict()]
+    assert s2.cores[0].to_dict() == lossy.to_dict()
+    assert s2.cores[1].shape == "box" and s2.cores[1].mu_r == 1.0       # an old raw box loads

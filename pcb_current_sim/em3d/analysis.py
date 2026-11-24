@@ -71,12 +71,17 @@ class Result:
         return self.model.Z(f)[0]
 
 
-def run(board, stackup, s, progress=lambda m: None):
+def run(board, stackup, s, progress=lambda m: None, materials=None):
+    """materials: a `materials.Library` for the cores' grades (default: built-ins + the user's)."""
     t0 = time.time()
     built = pcb.build(board, stackup, s, progress)
     core, cinfo, cwarn = (None, {}, [])
     if s.cores:
-        core, cinfo, cwarn = pcb.core_model(s, built.geom.filaments()[0], progress)
+        if materials is None:
+            from . import materials as MT
+            from ..suite import library as LB
+            materials = MT.Library(MT.path_for(LB.USER_LIBRARY))
+        core, cinfo, cwarn = pcb.core_model(s, built.geom.filaments()[0], board, stackup, materials, progress)
     progress(f"{built.n_fils} filaments: building the network...")
     sysm = system.System(built.geom, progress, core=core, f_max=s.f_max)
     if sysm.modes is not None:
