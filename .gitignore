@@ -30,3 +30,4 @@ sim/demo/*.png
 .idea/
 *.swp
 .DS_Store
+docs/screenshots/check_*.png

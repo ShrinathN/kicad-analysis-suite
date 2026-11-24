@@ -30,17 +30,20 @@ for f in ("demo.kicad_pcb", "demo.current_sim.json"):
 
 
 def shot(win, name):
-    """Grab the window from the screen (includes the menu bar and embedded web views)."""
+    """Grab the window's client area (menu bar not included)."""
     win.Raise()
     win.Update()
     wx.SafeYield()
-    dc = wx.ScreenDC()
-    x, y = win.GetScreenPosition()
-    w, h = win.GetSize()
+    # the window's own surface: a wx.ScreenDC grab comes back black on Wayland
+    dc = wx.ClientDC(win)
+    w, h = win.GetClientSize()
     bmp = wx.Bitmap(w, h)
     m = wx.MemoryDC(bmp)
-    m.Blit(0, 0, w, h, dc, x, y)
+    m.Blit(0, 0, w, h, dc, 0, 0)
     m.SelectObject(wx.NullBitmap)
+    if not any(bmp.ConvertToImage().GetData()):
+        print("BLANK grab, not written:", name)
+        return
     bmp.SaveFile(os.path.join(OUT, name), wx.BITMAP_TYPE_PNG)
     print("wrote", name)
 
@@ -157,6 +160,16 @@ def library():
 
 step(library, 1500)
 step(lambda: (shot(s.windows["library"], "component_library.png"), s.windows["library"].Close()))
+
+
+def components():
+    c = SU.open_window(s, "components")
+    c.SetPosition((0, 0))
+    c.SetSize((1600, 560))
+
+
+step(components, 1500)
+step(lambda: (shot(s.windows["components"], "components.png"), s.windows["components"].Close()))
 
 # ---- Matching & Tolerance
 

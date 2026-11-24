@@ -27,13 +27,16 @@ def shot(win, name):
     win.Raise()
     win.Update()
     wx.SafeYield()
-    dc = wx.ScreenDC()
-    x, y = win.GetScreenPosition()
-    w, h = win.GetSize()
+    # the window's own surface: a wx.ScreenDC grab comes back black on Wayland
+    dc = wx.ClientDC(win)
+    w, h = win.GetClientSize()
     bmp = wx.Bitmap(w, h)
     m = wx.MemoryDC(bmp)
-    m.Blit(0, 0, w, h, dc, x, y)
+    m.Blit(0, 0, w, h, dc, 0, 0)
     m.SelectObject(wx.NullBitmap)
+    if not any(bmp.ConvertToImage().GetData()):
+        print("BLANK grab, not written:", name)
+        return
     bmp.SaveFile(os.path.join(OUT, name), wx.BITMAP_TYPE_PNG)
     print("wrote", name)
 
@@ -117,7 +120,9 @@ def regfit():
             r.Close()
             return finish()
         r.nb.SetSelection(k)
-        fn = f"pdn_regfit_{r.nb.GetPageText(k).lower()}.png"
+        # the docs' pdn_regfit_*.png were taken by hand (a datasheet plot, the fit window, the PDN window with the
+        # fit): written as check_ files so a rerun does not replace them
+        fn = f"check_pdn_regfit_{r.nb.GetPageText(k).lower()}.png"
         wx.CallLater(1200, lambda: (shot(r, fn), tabs(k + 1)))
     wx.CallLater(1500, lambda: (r._fit(), wx.CallLater(500, fitted)))
 

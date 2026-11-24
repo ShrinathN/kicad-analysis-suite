@@ -11,7 +11,7 @@ The suite is being built in this order. The plan below was worked out with the c
 | – | DC & Thermal: linear and switching regulators | done |
 | 3 | PDN (AC power integrity), including regulator load-step behaviour | done (impedance, decaps, regulator fit, load steps, Touchstone export, layout checks, saved regulator fits); later: line transient (PSRR), remote sense |
 | – | Simulation tests: a tests file per board (every parameter of each simulation, pass / fail checks, outputs), run from the command line, a Makefile, a script or the Tests window; reports in simulations/<timestamp>/ with comparison to the previous run | done |
-| 4 | 3D extraction (FastHenry / FastCap methods, built in) | steps 1-2 of 7 built (R / L / coupling of copper) |
+| 4 | 3D extraction (FastHenry / FastCap methods, built in) | steps 1-2 of 7 built (R / L / coupling of copper); step 3 under way: linear magnetic cores with lossy μ(f), core and material libraries, placement and slot snapping built |
 | 5 | Full-wave export (openEMS) | planned |
 | 6 | SI & Fields | planned |
 
@@ -20,6 +20,9 @@ Our own code implementing FastHenry's (filament PEEC) and FastCap's (panel) meth
 1. Filament solver core + validation. **Done.**
 2. Board copper -> 3D geometry, window: R(f), L(f), Q, coupling, current maps, wideband SPICE, batch tests. **Done.**
 3. Magnetic materials: core cells coupled to the filaments, material library (complex μ(f), gaps, DC bias, conductivity, core loss, μ(T)), core library (E / ER / EQ / PQ / RM / plate, toroid, pot, rod, ferrite sheet).
+   - 3a solver (facet volume-integral method, lossy Debye materials as passive modes in the reduced model). **Done.**
+   - 3b material library (generic classes + your grades, fit to datasheet μ' / μ''), parametric cores (plate / sheet, E-E / E-I with round or rectangular centre leg and gaps, rod, toroid, boxes), placement by coordinates, footprint or Edge.Cuts slots, GUI. **Done.**
+   - 3c DC bias (L against current), core loss against flux density (Steinmetz / iGSE), μ(T). Next.
 4. PCB coils and planar magnetics (with cores): L, R_ac, Q, k, leakage, inter-turn C, SRF.
 5. Coupling to Switching Loop cells (M di/dt pickup), shunt ESL and Kelvin routing, via-array current sharing.
 6. Capacitance matrix (FastCap method, layered dielectrics), C to a chassis / heatsink plane.

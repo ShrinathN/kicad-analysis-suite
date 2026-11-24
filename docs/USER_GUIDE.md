@@ -1,6 +1,6 @@
 # User guide
 
-The full reference for the PCB Analysis Suite: installation, every tool and option, the physical models, outputs and tests. For a short overview see the [README](../README.md); for an explanation of each tool with worked use cases and interactive calculators, open [index.html](index.html) in a browser; for development notes see [DEVELOPMENT.md](DEVELOPMENT.md).
+The full reference for the PCB Analysis Suite: installation, step-by-step [workflows](#workflows), every tool and option, the physical models, outputs and tests. For a short overview see the [README](../README.md); for an explanation of each tool with worked use cases and interactive calculators, open [index.html](index.html) in a browser; for development notes see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Overview
 
@@ -51,6 +51,91 @@ Other options: `--no-auto-resistors`, `--no-crop`, `--no-magnetic`, `--b-height 
 Example board with a shunt, a FET element and pull resistors: `sim/demo/demo.kicad_pcb`
 (`python3 -m pcb_current_sim sim/demo/demo.kicad_pcb --vsource "J1.1>J1.2:12:supply" --element "J2.1-J2.2=2.4:LOAD:ext" --element "Q1.3-Q1.2=20m:Q1:0.35" --pulse 4:20:steady`).
 
+## Workflows
+
+Step-by-step flows for the common questions. Each one names the window and the buttons; the tool sections below explain every option. All of them start the same way: **save the board in KiCad (refill zones first)**, click **PCB Analysis Suite** on the toolbar, and open the tool from Home.
+
+![Home window](screenshots/home.png)
+
+### 1. IR drop and temperature of a supply path (DC & Thermal)
+1. Open **DC & Thermal**. In KiCad select the source pads, then the load pads (source first), and press *Add from KiCad selection*; give the current (`3A`, `500m`). For a supply that holds a voltage, add a *voltage source* row instead and *load* rows at the chips.
+2. Check the **Elements** list: resistors on the board are found from their Value; add FETs (R_on), inductors (DCR), fuses and diodes between their pads (*Add…*), and untick "heats the board" for off-board loads.
+3. Leave **Thermal** on (ambient, natural convection) and press **Run simulation**.
+4. In the results window read the Summary (voltage at each load, T_max, the hottest pad), then the 2D map: |J| for current crowding, V for the drop along the path, T for hot spots. Hover for values; set a ΔV reference by clicking.
+5. Change the copper (wider neck, more vias, a pour), *Refill zones + save* (KiCad bar of the window), run again and compare.
+
+![DC & Thermal window](screenshots/dc_main.png)
+![Temperature map](screenshots/dc_viewer_temperature.png)
+
+### 2. A power tree with regulators (DC & Thermal + Components)
+1. In **Components** (Home → shared row) or in DC & Thermal's Elements box, *Add regulator…*: an LDO or a switching regulator between its IN, OUT and GND pads, with V_out, I_q, efficiency, Ψ_JB and T_j max from the datasheet.
+2. Feed the input with a voltage-source row and put load rows on each output rail.
+3. Run: the Regulators tab gives each regulator's input and output voltage, dropout, loss and estimated junction temperature; the thermal map shows the heat spreading from its pads.
+
+![Components](screenshots/components.png)
+
+### 3. The hot loop of a buck or boost converter (Switching Loop)
+1. Open **Switching Loop** and pick the switch node (or select one of its pads in KiCad). *Detect parts* finds the switches, the hot-loop capacitors and the gate drives; the cell diagram draws what it found.
+2. Work down the **Checks** list: each line has a button that fixes it or opens the right dialog (enter the FETs' datasheet values in *Edit model…*, confirm the gate drives).
+3. **Operating point**: the voltage across the switches and the switched current (or *From the converter's V_in, V_out, I_out…*). Tick "Simulate the switching edges".
+4. **Analyse**. Read *What it means* on the Summary tab: the loop rated, the ringing, the biggest contributors and what to do about each. *Where the L is* splits the loop by net, layer, vias and parts; *Switching* shows the edges; *Map* where the high-frequency current runs.
+5. *Snubber* → *Suggest values* → *Put in the cell*, Analyse again; *EMI* for an estimate against CISPR 32.
+6. Before changing the layout press *Keep these results as the baseline* (Compare tab); after the change *Save in KiCad, reload and analyse* shows before and after side by side.
+
+![Switching Loop summary](screenshots/loop_summary.png)
+![Switching edges](screenshots/loop_switching.png)
+
+### 4. Is the rail decoupled well enough? (PDN)
+1. Open **PDN (AC)**, pick the rail and tick its return nets; *Find the rail's parts again* lists the decaps, the regulator output and the loads.
+2. Set the **Target**: rail voltage, allowed deviation, load step and its rise time (Z_target = V × deviation / ΔI).
+3. Regulator: R + L from the datasheet, or *Fit from the datasheet plot…* (load-transient screenshot → mark the plot area → read the traces → Fit → *Use for this rail*). Check that the Regulator box names its output pad (else *Pick output pad…*): without it the fit is not connected.
+
+   ![Reading the datasheet plot](screenshots/pdn_regfit_image.png)
+4. **Analyse**. Impedance: Z at each load against the target, bare board / with decaps / complete. Decaps: which capacitor works in which band. What if: what each capacitor is worth. Layout: voids, missing returns, long decap returns. Load steps: the rail's voltage over time.
+5. Move or add decaps, save, Analyse again; *Touchstone…* exports the rail for a circuit simulator.
+
+![PDN impedance](screenshots/pdn_impedance.png)
+
+### 5. A SPICE model of a trace or power path (Trace R/L/C → SPICE)
+1. Open **Trace R/L/C → SPICE**; add the ports (two or more pads in order, or *From KiCad selection*) and tick the return nets (GND is guessed).
+2. Add parts on the path as elements if the path goes through them (an inductor, a 0 Ω, a capacitor to ground).
+3. **Extract**. Summary: R, L, C, Z₀ and delay per path; Board: the path coloured by Z₀ with impedance steps marked; SPICE: *Save subcircuit…*.
+
+![Trace schematic tab](screenshots/extract_schematic.png)
+
+### 6. A PCB coil: L, R and Q against frequency, with a ground pour and a ferrite sheet (3D extraction)
+1. Open **3D extraction**; *Add…* a port: + at the coil's outer pad, − at its inner pad (or select both pads in KiCad, *From KiCad selection*).
+2. Tick the ground pour's net under **Conductors** to include its eddy currents; set f max (100 MHz for a 13.56 MHz coil). *Estimate* shows the filament count and run time.
+3. **Analyse**. Summary and *R, L, Q (f)*: L and Q at the working frequency; *Current*: the eddy currents in the pour.
+4. Add the ferrite sheet: *Magnetic cores → Add…*, shape "Plate / ferrite sheet", its size and thickness, a material (a built-in class or your grade from *Materials…*), centred on the coil, on the side away from the board, with its adhesive gap as the clearance. The preview shows it over the copper. Analyse again: L rises, and a lossy grade adds R near its f_r.
+5. *SPICE* → *Wideband* gives a model that is right at every frequency, core loss included.
+
+![3D extraction: R, L, Q](screenshots/em3d_rlq.png)
+![Ferrite sheet over the coil](screenshots/em3d_core_dialog.png)
+
+### 7. A planar inductor or transformer on an E core (3D extraction)
+1. Draw the slots for the core's legs in KiCad (Edge.Cuts, on the board or in the core's footprint); save.
+2. In **3D extraction** add a port across the winding, then *Magnetic cores → Add…*, shape "E core", the dimensions A-F from the core's datasheet, E-E or E + I, the gap (ground centre leg, or a spacer in all legs) and the material.
+3. *Snap to the board's slots*: x, y and the rotation are set so the legs sit in the slots (outer legs may also pass the board's edge). Check the preview, OK.
+4. Analyse: L at DC and against frequency, R with the core's loss. Try gaps: L falls with the gap as N² μ0 A_e / (g + l_e / μ), plus fringing.
+5. For a transformer add a port per winding: the Summary's coupling table gives M and k.
+
+![E core snapped to the slots](screenshots/em3d_core_snap.png)
+
+### 8. Will the matching network survive part tolerances? (Matching & Tolerance)
+1. Open **Matching & Tolerance**; set the source and load (R + jX, an RLC model or an `.s1p` file) and the bands with their return-loss and insertion-loss specs.
+2. Add parts from the palette (series / shunt L, C, R, lines, stubs); pick each one from the component library or type values and tolerances.
+3. Tick the analyses (corners, Monte Carlo with its sample count and distribution, worst-case search, sensitivity) and press **Run analysis**; read yield per band, the Smith chart cloud and the sensitivity chart; the worst-case table and the BOM list each part.
+
+![Matching editor](screenshots/matching_editor.png)
+
+### 9. Rerun the checks after every layout change (Simulation tests)
+1. In any tool, after a run you like, press **Save as test…**: the setup goes into `<board>.simtests.toml`.
+2. Home → **Simulation tests**: add checks to each test (T_max < 85 °C, Z within target, loop L < 3 nH, …) from the metrics of its last run, and pick the files to keep.
+3. From a terminal or a Makefile: `python3 -m pcb_current_sim run board.simtests.toml --all`. The exit code is 1 when a check fails; `simulations/<timestamp>/report.html` holds the numbers, the plots and the change since the last run.
+
+![Tests window](screenshots/tests_window.png)
+
 ## Suite
 All windows run in one process and share the loaded board, the stackup and the component library. Every window has a **Suite** menu that leads to Home, the tools and the shared panels.
 - **Home** shows the board, its stackup and what the scenario file holds, with tiles for each tool:
@@ -65,6 +150,8 @@ All windows run in one process and share the loaded board, the stackup and the c
   - The frequency dependence uses the wideband Djordjevic–Sarkar model, which is causal: εr falls slowly with f and tanδ stays nearly flat. A constant model is the alternative.
   - The DC tool's copper-thickness list edits the same overrides.
 - **Components** is the board's shared list of parts between pads: resistors found on the board (by footprint and Value) plus parts added by hand (a resistance such as an inductor's DCR or a FET's R_on, a diode, a capacitor, an inductor, a regulator). A part is defined once and every tool uses the same definition: an inductor's DCR entered in DC & Thermal is the part the Trace tool and PDN see, and an edit in any window changes it everywhere. Each tool switches a part on or off for itself, so a part can be in DC & Thermal and left out of a Trace extraction. The window lists every part with its value, pads, nets and a column per tool (✓ = on there), with Add…, Add regulator…, Edit…, Delete and "On / off in …" per tool. Resistors found on the board are on in DC & Thermal and off elsewhere until switched on; they cannot be deleted, only switched off. A capacitor's model edited in Switching Loop (ESR, ESL, library part) is stored with the part as its *real model* ("model" in the Switching Loop column); every cell of that board uses it, and so will PDN. DC & Thermal and the Trace tool use the ideal value (C open at DC; ideal C in Trace). Changing a capacitor's value elsewhere keeps its real model with the new value. Deleting a part that another tool uses asks first; renaming one makes it a new part for the other tools (switched off there). The DC & Thermal and Trace element lists are views of this list (with an "Also used by" column); changes are saved at once, in the scenario's `components` section. Older scenario files, with separate lists in the `dc` and `extract` sections, are merged on first load: the same part in both becomes one part used by both, and a part with the same name but different values in the Trace list is renamed `NAME_trace`.
+
+  ![Components window](screenshots/components.png)
 - **Component library** holds real-part models used by the matching and PDN tools. Each part has a tolerance (± % or absolute; capacitor codes A/B/C/D) and parasitics:
   - L: DCR, Q at f, SRF.
   - C: ESR or Q, ESL or SRF, dielectric with a temperature and DC-bias curve.
@@ -111,6 +198,16 @@ All windows run in one process and share the loaded board, the stackup and the c
 - **Losses to DC & Thermal.** "Send losses to DC & Thermal…" (Switching tab) puts each switch's loss on its pads as heat in DC & Thermal's **Heat at parts**: the hard-switched switch gets (E_on + E_off)·f_sw plus I_rms²·R_on over its on-time (duty cycle), the other position I_rms²·R_on (a FET) or V_f·I + R_d·I_rms² (a diode) over the rest, with I_rms² = I² + ΔI²/12. An IC's internal switches add up on the IC. Dead time (the body diode carrying the current) is not included. It replaces earlier heat on the same parts; run DC & Thermal with thermal on to see the temperatures.
 - **Saved models.** In Edit model… of a MOSFET, diode or an IC's internal switch: "Save as…" stores its values under the part number (the footprint's Value is suggested; an IC's switches as "<value> high-side / low-side") in `switch_models.json` next to the component library; "Saved models" fills the fields from one. Detect parts applies a saved model to every part with that value, on any board, so a datasheet is entered once.
 - **Vendor SPICE models.** In a MOSFET's Edit model…: the manufacturer's model file, the subcircuit (listed from the file), its pin order (D, G, S, T for a temperature pin held at 25 °C, NC; guessed from the pin names, else the usual D G S) and whether the model includes the package (then the package L and R_G fields are left out). The edges then run in ngspice: KiCad's bundled libngspice (or an ngspice program on the PATH); the rest of the circuit is written as SPICE elements with the same equations (the MOSFET channel as a behavioural source, the capacitances as non-conducting junctions with the same C(V), the copper as coupled inductors). "Switching simulator" under Advanced: Auto (ngspice when a FET has a vendor model), Built-in, or ngspice.
+- **Screenshots** (the buck demo board, `sim/demo/buck_demo.kicad_pcb`, at 10 A with the suggested snubber):
+
+  ![Summary: cell diagram, checks, What it means](screenshots/loop_summary.png)
+  ![Where the L is](screenshots/loop_breakdown.png)
+  ![Switching edges](screenshots/loop_switching.png)
+  ![Map](screenshots/loop_map.png)
+  ![Impedance](screenshots/loop_impedance.png)
+  ![Snubber designer](screenshots/loop_snubber.png)
+  ![EMI estimate](screenshots/loop_emi.png)
+  ![Compare with the baseline](screenshots/loop_compare.png)
 - **Limits.** The inductance analysis is small-signal at the operating point; the transient uses the copper at one frequency (the ringing frequency), so skin-effect damping is exact there only, and its copper resistance between ports is diagonal in ngspice. Quasi-static: fine while the loop is much smaller than a wavelength (30 mm is λ/10 at 1 GHz). Copper outside the window and other nets' copper (eddy currents in unrelated planes) are not included. The edge's timing comes from the gate drive (datasheet delays are for reference). Temperature is 25 °C (V_th and R_DS(on) change when hot).
 - **CPU use.** The heavy numerics use a third of the CPU cores (4 of 12), not all of them: this PC powered off twice with every core busy. Set the environment variable `PCB_SIM_THREADS` to change it (it applies to all tools).
 - **Saving.** The setup goes into the scenario's `loop` section.
@@ -122,12 +219,22 @@ All windows run in one process and share the loaded board, the stackup and the c
   - *loads*: ICs with pins on the rail; each one's rail pins are one port. "Add part…", "On / off", "Remove".
 - **Regulator model from the datasheet.** "Fit from the datasheet plot…" (Regulator box) fits the regulator's control loop to its datasheet's load-transient plot, so the rail sees the real loop, which reacts to *your* board's capacitors. In the window:
   1. Open or paste a screenshot of the plot (zoom the PDF in first for a sharp image), or import a CSV already digitised elsewhere (columns t, i, v).
+
+     ![A datasheet load-transient plot](screenshots/pdn_regfit_source.png)
   2. "Mark the plot area": click the grid's top-left and bottom-right corners; enter the divisions (10 × 8 on most scopes) and the time per division.
   3. Read each trace, the load current and the output voltage (AC coupled is fine), in one of two ways, chosen per trace with its "by colour" / "by points" choice. Enter their scales per division. Optionally give the current step as the caption states it (the trace may read a little differently).
      - **By colour:** "Pick colour" and click on the trace. The trace found is drawn over the image; the colour tolerance widens or narrows the pick. A coloured trace is matched by hue, so the dark edges of two different traces are not confused; a black or grey one by plain colour distance. Markers and labels in the trace's colour are skipped (the trace is followed column by column, and an isolated far jump is ignored), and steep spikes keep their tips. Where the trace runs under a label or into another trace, "Edit as points" turns it into a few dozen points (corners, dips and spikes kept) that you correct by hand.
      - **By points** (black-and-white plots, or where the colour search goes wrong): "Click points" and click along the trace, as many points as you like and in any order. Left click adds a point, right click removes the nearest one, a right-drag box removes every point in it, Backspace (or Undo) removes the last one, and Esc or the button again finishes; Clear starts over. The points are joined by straight lines, so put them at the corners of each step (two points one above the other for a vertical edge, in the order the trace goes), at the bottom of each dip and the top of each overshoot, and a few along each recovery. Zoom in with the toolbar for accuracy: clicking keeps the zoom. An image with no colours starts in this mode. Points are saved with the model.
+
+     ![Image tab: plot area marked, both traces read by colour](screenshots/pdn_regfit_image.png)
   4. Enter the datasheet's test conditions: the output capacitance used for the plot (from its application circuit; after DC-bias derating if known) and its ESR, the control type (current-mode PWM, voltage-mode PWM, constant on-time / hysteretic, LDO; the datasheet's first page says), and for a boost its V_in, V_out, I_out and inductor (they set the right-half-plane zero).
   5. Fit: each load step of the plot (rising, falling) is fitted on its own, since regulators answer them differently. The Fit tab overlays model and datasheet per edge and shows the output impedance with the test C and with 10× it. "Use for this rail" makes the PDN tool use it (the rising-step fit for Z(f)).
+
+     ![Fit tab: model over the datasheet per edge, output impedance](screenshots/pdn_regfit_fit.png)
+
+     The fit is used only once the regulator's output is on the board: the Regulator box must name an output pad. With "None picked" (as below) the rail rests on its capacitors alone; press *Pick output pad…*.
+
+     ![PDN window with the fitted loop, output pad not picked yet](screenshots/pdn_regfit_in_pdn.png)
   6. Keep it: "Save fit…" (Regulator box) stores the rail's fitted loop under the regulator's part number (its footprint's Value) in `regulator_models.json` next to the component library. On any board, a rail whose regulator has no fit yet gets the saved one when a part with that Value sits on the rail or on a net of the regulator output part (a buck's IC on the inductor's switch node); "Saved fits" lists them all (this board's parts first, with their reference) to pick one by hand, "Forget" removes one from the store. The fit transfers between boards because it is the regulator's loop, not one board's output impedance.
      - **Control type.** Besides current-mode, voltage-mode, constant on-time and LDO there are "Ringing recovery" (a resonant pole pair: a recovery that rings for several cycles) and "General" (two zeros, a pole and a resonant pair, type-III compensation), and "Try every type and keep the best" (a type with more parameters is kept only when it fits clearly better; the result lists every type's error). The fit never returns a loop that would be unstable with the test capacitance.
      - **Fit options.** "Fit up to … after each edge" fits only that long after (and before) each step, to leave out what a linear loop can't follow (a burst pattern, a drift long after the recovery). "Also fit the test capacitance" lets the fit find C within ±50 % of the value entered and its ESR (datasheets rarely give C after DC-bias derating); the fitted values are shown and kept with the model. "Match the peak deviation first" weights the dip / overshoot, which is what the PDN check uses.
@@ -145,6 +252,14 @@ All windows run in one process and share the loaded board, the stackup and the c
   - *Touchstone…* (Impedance tab): the rail as an S-parameter file (`.sNp`, Touchstone v1, RI; port names in the comments), either "Loads, complete rail" (Z between the loads as analysed) or "Board only" (the bare copper with a port at every load, every decap, switched on or not, and the regulator output; connect your own part models there in a circuit simulator: with this tool's models connected it gives back the analysed Z). Reference impedance 50 Ω by default; 1 Ω or 0.1 Ω are usual for PI (13 digits are written, so either is exact). Matching & Tolerance reads `.s1p` / `.s2p` files.
   - *Layout*: what in the layout raises the rail's impedance, with where it is (board coordinates; selecting a line highlights its part in KiCad, double-clicking marks the place on the Map): rail copper with no return copper above or below it, and voids, slots or splits in the return plane under the rail (where the nearest return is 1.8× or more farther than elsewhere on that layer). These are ranked by how much they add to the copper's inductance seen by each load (1 A at each load, every decap and the regulator connected, at the target's upper frequency, at least 1 MHz) and listed from 3 % up; smaller ones are counted in one line, so a ground plane full of antipads does not flood the list. Also decaps whose return-side mounting L is above 0.5 nH or above the part's own ESL (a via far from the return pad), and loads with no decap within 5 mm. Which capacitors could be removed is the What-if tab's job: current shares alone don't tell (above the target band and near anti-resonances every capacitor carries a large share).
   - *Summary*: pass / fail per load with the worst frequency and the rail movement it means, resonance peaks, the layout findings, warnings (mesh too coarse for f max, f max below the target).
+- **Screenshots** (the +3V3 rail of a 4-layer board):
+
+  ![Impedance at a load against the target](screenshots/pdn_impedance.png)
+  ![Decaps](screenshots/pdn_decaps.png)
+  ![Load steps](screenshots/pdn_load_steps.png)
+  ![Map at a plane resonance](screenshots/pdn_map.png)
+  ![Layout findings](screenshots/pdn_layout.png)
+  ![Regulator fit to the datasheet plot](screenshots/pdn_regfit_fit.png)
 - **Limits.** No ground bounce (the return is ideal), the regulator linearised (R + L, or its fitted loop), 2.5D (not full-wave: good to the low GHz). 2-layer boards without a solid return under the rail are much less accurate (warned). The setup is saved in the scenario's `pdn` section.
 
 **Trace R/L/C → SPICE** turns the copper between pads into an RLC model for a circuit simulator.
@@ -186,6 +301,14 @@ All windows run in one process and share the loaded board, the stackup and the c
 - **Window.** By default the ports' and links' pads and their nets' tracks plus the margin; pours (of any net, also a port's return pour) never widen it and are included only inside it. "Window x0, y0, x1, y1" sets it by hand, in board coordinates.
 - **Adaptive cells** (on by default): pour cells keep the cell size within "Fine cells within" of the ports' pads and tracks (default twice the thickest dielectric, where the return current runs) and double at 2x, 4x and 8x that distance, up to 8 cells. Only the fine band gets filaments through the copper's thickness.
 - **Filament limit.** Memory grows as the square of the filament count (about 5 GB at 12000). Over the limit the tool, in this order, narrows the fine band, uses larger cells (the path's own pads lose some accuracy: 1 mm cells read a path's R 8 % low against 0.5 mm) and puts fewer filaments in each track; the warnings say what it did. "Estimate" meshes without solving and shows the filament count, memory, a rough run time and the window.
+- **Magnetic cores.** "Magnetic cores → Add…" places a core; its permeability, and the loss from its material's frequency dependence, are part of the solve.
+  - *Shapes*: plate / ferrite sheet (on the top or bottom side, with a clearance); E core (E-E pair or E + I plate, rectangular or round centre leg, gaps in the centre and outer legs; the legs go through slots in the board and the window is centred on it; dimension letters A-F as on core datasheets); rod; toroid; box (any block in board coordinates; several boxes make any shape, a box with μ 1 cuts an air gap). Round parts are staircases of strips with the true area; rotations are multiples of 90°.
+  - *Placement*: centre x, y in board coordinates or as an offset from a footprint, rotation, side. "Snap to the board's slots" puts an E core where its legs fit the board's cut-outs (Edge.Cuts loops inside the board, also those drawn in footprints, or non-plated holes); outer legs may also pass outside the board's edge.
+  - *Materials*: a grade is μi and a relaxation frequency f_r, μ(f) = 1 + (μi − 1) / (1 + j f / f_r): μ' halves and μ'' peaks at f_r (a one-relaxation fit; real ferrites' μ'' peak is broader). The built-in grades are generic classes with typical values (MnZn, NiZn, ferrite sheets, iron and alloy powder, nanocrystalline, an ideal lossless one), not products: add your grade with "Materials… → Add…", by hand or fitted to points read off its datasheet's μ', μ'' plot (`f μ' [μ'']` per line). Your grades are saved in `materials.json` next to the component library.
+  - *Cells*: "Core cell" sets one size everywhere; blank picks about 2500 cells over the core's volume, finer where copper comes close to the core, coarser (with a warning) when that would not fit the memory (dense: about 3000-4000 cells in 20 GB).
+  - *How*: the core is cut into cells whose magnetisation is solved together with the filaments (a volume integral method with face unknowns, which keeps high-μ cores accurate); its response is added to the filament network as modes, plain inductance for lossless material and parallel R-L branches for lossy, so the wideband model and the SPICE subcircuits include the core loss.
+  - *Checks*: a loop over a large high-μ plate converges to the image-method value from below; a cube in a uniform field converges to its known polarisability; a gapped ring's L follows the gap reluctance (within 1.4 %) plus a constant air leakage; a closed ring's loss tangent equals the material's μ''/μ'; a planar E core around a 3-turn board spiral reads 0.86 of the simple magnetic-path estimate ungapped and 1.33 x the bare-gap estimate with a 0.2 mm gap (fringing plus the winding's own air inductance).
+  - *Not yet*: DC bias (L against current), core loss against flux density (Steinmetz) and temperature; shaped outer legs of PQ / RM cores; rotations other than quarter turns. Copper inside a core box gives a warning: a winding must go around a leg, not through it.
 - **Options.** Frequency range; "Filaments for" (the skin depth the filaments resolve, blank = f max); the pour / pad cell size (tracks keep their true width); the margin; most filaments across a track, through a track and through a pour.
 - **Results.**
   - *Summary*: per port R and L at DC, mid band and f max, R(f max) / R_dc, the highest Q = ωL / R and where; per pair of ports M and k at DC, mid band and f max.
@@ -195,7 +318,20 @@ All windows run in one process and share the loaded board, the stackup and the c
   - "Export CSV…": R, L of every port and the couplings at every frequency.
 - **Accuracy.** Round-wire skin effect within 0.3 % of the exact Bessel solution; bar self-inductance within 0.2 % of Grover; two coaxial loops within 0.1-0.15 % of Maxwell's formula; against FastHenry with the same filaments: a hairpin within 0.1 %, a 3-turn spiral coil L within 0.15 % and R within 0.45 % at 1 GHz; a track over a ground pour within 2.5 % of the microstrip formula; a coil drawn in KiCad equals the same coil built from segments.
 - **Filaments matter.** Too few filaments read R at high frequency low (a coil's R at 100 MHz 35 % low with 5 x 3 per track): the tool picks the counts from the skin depth; lower "Filaments for" only to save time when the top of the band matters less.
-- **Limits.** Quasi-static: no radiation, valid while the copper is shorter than about λ/10. No capacitance yet (so no self-resonance), no magnetic materials (cores) yet. Parts between pads are not in the circuit: close loops with links. Dense matrices: a region of a board (a coil, a converter's power stage, a shunt), not a whole board at fine cells.
+- **Screenshots** (`sim/demo/coil_demo.kicad_pcb`: a 4-turn coil over a ground pour; `sim/demo/planar_demo.kicad_pcb`: a 3-turn spiral with slots for an E18 core):
+
+  ![Summary](screenshots/em3d_summary.png)
+  ![R, L, Q against frequency](screenshots/em3d_rlq.png)
+  ![Current: eddy currents in the pour, a track's cross-section](screenshots/em3d_current.png)
+  ![SPICE](screenshots/em3d_spice.png)
+  ![Core dialog: a ferrite sheet over the coil](screenshots/em3d_core_dialog.png)
+  ![With the ferrite sheet: R, L, Q](screenshots/em3d_core_rlq.png)
+  ![With the ferrite sheet: current map with the core outline](screenshots/em3d_core_current.png)
+  ![An E core snapped to the board's slots](screenshots/em3d_core_snap.png)
+  ![The planar E core: summary](screenshots/em3d_planar_summary.png)
+  ![Material library](screenshots/em3d_materials.png)
+  ![A grade fitted to datasheet points](screenshots/em3d_grade_fit.png)
+- **Limits.** Quasi-static: no radiation, valid while the copper is shorter than about λ/10. No capacitance yet (so no self-resonance). Cores are linear (no saturation or DC bias yet). Parts between pads are not in the circuit: close loops with links. Dense matrices: a region of a board (a coil, a converter's power stage, a shunt), not a whole board at fine cells.
 - **Saving.** The setup goes into the scenario's `extract3d` section; "Save as test…" keeps it as a simulation test.
 
 **Matching & Tolerance** checks whether a matching network still works across real part tolerances.
@@ -214,6 +350,14 @@ All windows run in one process and share the loaded board, the stackup and the c
   - Optional temperature sweep, which drifts capacitors by dielectric.
 - **Outputs.** Smith chart (nominal, Monte Carlo curves in band, load alone, RL spec circle), S11, S21 with the loss in the parts, VSWR, histograms with yield per band, sensitivity, a worst-case table and a BOM (CSV). The response can also be exported as CSV.
 - **Saving.** The network goes into the scenario's `matching` section when a board is open, or into a `.match.json` file. It saves on every run and when the window closes.
+- **Screenshots** (a 2.4 GHz antenna, 20 Ω + 1.5 nH + 3 pF, matched to 50 Ω with 0402 parts):
+
+  ![Editor](screenshots/matching_editor.png)
+  ![Smith chart](screenshots/matching_smith.png)
+  ![S11 against the spec](screenshots/matching_s11.png)
+  ![Yield histograms](screenshots/matching_histograms.png)
+  ![Sensitivity](screenshots/matching_sensitivity.png)
+  ![Worst case and BOM](screenshots/matching_worst_case_bom.png)
 - Not modelled: microstrip dispersion and thickness correction, coupling between parts, and pad or via parasitics (add them as elements).
 
 **Highlight in KiCad.** With the suite started from KiCad, clicking parts in a tool's list selects their footprints in the PCB editor: the Switching Loop's parts and gate drives (MOSFET, driver, gate resistor), DC & Thermal's excitations and elements, the Trace tool's ports and elements. Several rows selected (Shift / Ctrl-click) are sent at once. Switch it off with Suite → "Highlight selected parts in KiCad". The schematic editor: kicad-python 0.8 cannot reach it yet (its schematic module fails to import), so the symbols are highlighted only through KiCad's own cross-probing from the PCB editor, if that is on and reacts to API selections; the status bar says what was selected.
@@ -501,6 +645,13 @@ Outputs: `csv` (response.csv: nominal RL, IL, VSWR per frequency (+ Monte Carlo 
     - Drag to rotate, scroll to zoom; hover shows values. *Open in browser* and *Save 3D HTML…* give a self-contained page that works offline.
     - The Tk viewer opens the same scene in the browser. On the CLI it is `--formats html3d`.
     - It is a visualisation of the 2.5D results; the solver itself is not 3D.
+- **Screenshots** (the demo board `sim/demo/demo.kicad_pcb`: a 12 V supply, a FET as 20 mΩ, a 2.4 Ω external load, a 4x 20 ms pulse):
+
+  ![DC & Thermal window](screenshots/dc_main.png)
+  ![Current density](screenshots/dc_viewer_current_density.png)
+  ![Temperature](screenshots/dc_viewer_temperature.png)
+  ![B normal above the board](screenshots/dc_viewer_bfield.png)
+  ![3D tab](screenshots/dc_viewer_3d.png)
 - **ParaView.** The *ParaView…* button or `--formats vtk` writes a folder you can open in ParaView. It uses VTK XML (zlib, base64), written with numpy only.
   - `board.vtm` is a multiblock with the copper sheets at their true heights (|J|, J vector, V, power density, copper fraction, net id), the thermal sheets (T and end-of-pulse T), the B planes (B vector, |B|, Bz), and line sets for the vias (current), elements (I, P, R) and outline.
   - `pulse.pvd` is the pulse temperature as a time series of 20 frames that ParaView animates.

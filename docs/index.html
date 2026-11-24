@@ -122,13 +122,14 @@ svg.flow .sm{font-size:11px; fill:var(--ink2)}
     <li><a href="#start">What it is</a></li>
     <li><a href="#install">Install and first run</a></li>
     <li><a href="#concepts">Concepts shared by all tools</a></li>
+    <li><a href="#flows">Workflows: step by step</a></li>
     <li class="grp">Tools</li>
     <li><a href="#dc">DC &amp; Thermal</a>
       <ol><li><a href="#dc-how">How it works</a></li><li><a href="#dc-use">Using it</a></li><li><a href="#dc-calc">Trace calculator</a></li><li><a href="#dc-limits">Limits</a></li><li><a href="#dc-cases">Use cases</a></li></ol></li>
     <li><a href="#trace">Trace R/L/C → SPICE</a>
       <ol><li><a href="#trace-how">How it works</a></li><li><a href="#trace-use">Using it</a></li><li><a href="#trace-calc">Line calculator</a></li><li><a href="#trace-limits">Limits</a></li><li><a href="#trace-cases">Use cases</a></li></ol></li>
     <li><a href="#em3d">3D extraction</a>
-      <ol><li><a href="#em3d-how">How it works</a></li><li><a href="#em3d-use">Using it</a></li><li><a href="#em3d-calc">Skin-depth explorer</a></li><li><a href="#em3d-limits">Limits</a></li><li><a href="#em3d-cases">Use cases</a></li></ol></li>
+      <ol><li><a href="#em3d-how">How it works</a></li><li><a href="#em3d-use">Using it</a></li><li><a href="#em3d-cores">Magnetic cores</a></li><li><a href="#em3d-calc">Skin-depth explorer</a></li><li><a href="#em3d-limits">Limits</a></li><li><a href="#em3d-cases">Use cases</a></li></ol></li>
     <li><a href="#loop">Switching Loop</a>
       <ol><li><a href="#loop-how">How it works</a></li><li><a href="#loop-use">Using it</a></li><li><a href="#loop-ring">Ringing &amp; snubber explorer</a></li><li><a href="#loop-emi">Spectrum explorer</a></li><li><a href="#loop-limits">Limits</a></li><li><a href="#loop-cases">Use cases</a></li></ol></li>
     <li><a href="#pdn">PDN (AC power integrity)</a>
@@ -207,7 +208,7 @@ two sets the inductance. This is why the same trace can be 0.4 nH/mm over a soli
 without one.</p>
 <h3>Scenario file</h3>
 <p>Each tool saves its setup in <code>&lt;board&gt;.current_sim.json</code> next to the board, in its own section
-(<code>stackup</code>, <code>components</code>, <code>dc</code>, <code>extract</code>, <code>loop</code>, <code>pdn</code>,
+(<code>stackup</code>, <code>components</code>, <code>dc</code>, <code>extract</code>, <code>extract3d</code>, <code>loop</code>, <code>pdn</code>,
 <code>matching</code>). A tool rewrites only its section. Commit this file with the project if you want colleagues to open the same analyses.</p>
 <h3>Shared panels and KiCad link</h3>
 <ul>
@@ -217,6 +218,145 @@ without one.</p>
   <li><b>Highlight in KiCad</b>: clicking parts in a tool's list selects their footprints in the PCB editor (Suite menu to switch it off). Most tools also take pads from the current KiCad selection.</li>
   <li><b>Tooltips</b>: every input field in every window explains itself on hover.</li>
 </ul>
+
+<h2 id="flows">Workflows: step by step</h2>
+<p>The common questions as click-by-click flows. Every flow starts the same way: <b>save the board in KiCad (refill zones
+with <kbd>B</kbd> first)</b>, click <b>PCB Analysis Suite</b> on the toolbar, open the tool's tile on Home. Each tool's
+section below explains the options and the physics; its use cases go deeper.</p>
+<figure><img src="screenshots/home.png" alt="Home window: board summary, tool tiles, shared panels" loading="lazy">
+<figcaption>Home: the board and its stackup at the top, a tile per tool, the shared panels (Stackup, Components, Component
+library, Results, External tools, Simulation tests) at the bottom.</figcaption></figure>
+
+<div class="uc" id="flow-dc"><h4>1. Voltage drop and temperature of a supply path</h4>
+<p class="who">DC &amp; Thermal · <a href="#dc">tool section</a></p>
+<ol>
+  <li>Open <b>DC &amp; Thermal</b>. In KiCad select the source pads, then the load pads (source first); click
+  <em>Add from KiCad selection</em> and type the current (<code>3A</code>, <code>500m</code>). A supply that holds a voltage
+  is a <em>voltage source</em> row, with <em>load</em> rows at the chips.</li>
+  <li>Check the <b>Elements</b>: resistors are found from their Value; add FETs (R<sub>on</sub>), inductors (DCR), fuses
+  and diodes between their pads; untick "heats the board" for off-board loads.</li>
+  <li>Leave <b>Thermal</b> on and press <b>Run simulation</b>.</li>
+  <li>In the results window: the Summary (voltage at each load, T<sub>max</sub>, hottest pad), then the maps: |J| for
+  crowding, V for the drop, T for hot spots. The values follow the pointer; a click sets a ΔV reference.</li>
+  <li>Change the copper in KiCad, press <em>Refill zones + save</em> (KiCad bar of the window), run again, compare.</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/dc_main.png" alt="DC and Thermal window" loading="lazy"><figcaption>Rows, elements, settings.</figcaption></figure>
+  <figure class="card"><img src="screenshots/dc_viewer_temperature.png" alt="Temperature map" loading="lazy"><figcaption>The result: temperature.</figcaption></figure>
+</div></div>
+
+<div class="uc" id="flow-reg"><h4>2. A power tree with regulators</h4>
+<p class="who">DC &amp; Thermal + Components · <a href="#shared">Components</a></p>
+<ol>
+  <li><em>Add regulator…</em> (DC &amp; Thermal's Elements box, or the Components window): LDO or switching, its IN, OUT and
+  GND pads, V<sub>out</sub>, I<sub>q</sub>, efficiency, Ψ<sub>JB</sub>, T<sub>j</sub> max from the datasheet.</li>
+  <li>A voltage-source row at the input connector, load rows on each output rail.</li>
+  <li>Run: the Regulators tab gives V in / out, headroom and dropout, loss and the junction temperature estimate.</li>
+</ol>
+<figure><img src="screenshots/components.png" alt="Components window: the board's parts between pads, on or off per tool" loading="lazy">
+<figcaption>Components: every part between pads, its value, pads and nets, and which tools use it.</figcaption></figure></div>
+
+<div class="uc" id="flow-loop"><h4>3. The hot loop of a buck or boost converter</h4>
+<p class="who">Switching Loop · <a href="#loop">tool section</a></p>
+<ol>
+  <li>Open <b>Switching Loop</b>, pick the switch node (or select one of its pads in KiCad), <em>Detect parts</em>. The cell
+  diagram draws the switches, the hot-loop capacitors and the gate drives found.</li>
+  <li>Work down the <b>Checks</b>: each line has a button that fixes it or opens the right dialog (the FETs' datasheet
+  values in <em>Edit model…</em>, the gate drives).</li>
+  <li><b>Operating point</b>: voltage across the switches and the switched current (or <em>From the converter's V<sub>in</sub>,
+  V<sub>out</sub>, I<sub>out</sub>…</em>); tick "Simulate the switching edges".</li>
+  <li><b>Analyse</b>; read <em>What it means</em> (Summary): the loop rated, the ringing, the biggest contributors and what to
+  change. <em>Where the L is</em>, <em>Switching</em>, <em>Map</em> show the details.</li>
+  <li><em>Snubber</em> → <em>Suggest values</em> → <em>Put in the cell</em> → Analyse; <em>EMI</em> for the estimate against
+  CISPR 32.</li>
+  <li><em>Keep these results as the baseline</em>, change the layout in KiCad, <em>Save in KiCad, reload and analyse</em>:
+  the Compare tab shows before and after.</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/loop_summary.png" alt="Switching Loop summary" loading="lazy"><figcaption>Cell diagram, checks, What it means.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_switching.png" alt="Switching edges" loading="lazy"><figcaption>The switching edges in time.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_compare.png" alt="Compare tab" loading="lazy"><figcaption>Before / after.</figcaption></figure>
+</div></div>
+
+<div class="uc" id="flow-pdn"><h4>4. Is the rail decoupled well enough?</h4>
+<p class="who">PDN · <a href="#pdn">tool section</a></p>
+<ol>
+  <li>Open <b>PDN (AC)</b>, pick the rail and tick its return nets; <em>Find the rail's parts again</em> lists the decaps, the
+  regulator output and the loads.</li>
+  <li><b>Target</b>: rail voltage, allowed deviation, load step and its rise time.</li>
+  <li><b>Regulator</b>: R + L, or <em>Fit from the datasheet plot…</em>: open the load-transient screenshot, mark the plot
+  area, read the current and voltage traces (by colour or by clicked points), enter the test capacitance, Fit, <em>Use for
+  this rail</em>. The Regulator box must name the regulator's output pad (else <em>Pick output pad…</em>): without it the fit is not
+  connected.</li>
+  <li><b>Analyse</b>: Impedance (each load against the target), Decaps (who works where), What if (what each cap is worth),
+  Layout (voids, missing return, long decap returns), Load steps (the rail's voltage over time).</li>
+  <li>Move or add decaps, save, analyse again; <em>Touchstone…</em> for a circuit simulator.</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/pdn_impedance.png" alt="PDN impedance" loading="lazy"><figcaption>Z at a load against the target.</figcaption></figure>
+  <figure class="card"><img src="screenshots/pdn_regfit_image.png" alt="Regulator fit: the datasheet plot with the traces read" loading="lazy"><figcaption>Reading the datasheet's load-transient plot.</figcaption></figure>
+</div></div>
+
+<div class="uc" id="flow-trace"><h4>5. A SPICE model of a trace or power path</h4>
+<p class="who">Trace R/L/C → SPICE · <a href="#trace">tool section</a></p>
+<ol>
+  <li>Open <b>Trace R/L/C → SPICE</b>; add the ports (pads in order, or <em>From KiCad selection</em>); tick the return nets
+  (GND-like nets are guessed).</li>
+  <li>Parts on the path (an inductor, a 0 Ω, capacitors to ground) as elements.</li>
+  <li><b>Extract</b>: Summary (R, L, C, Z₀, delay), Board (the path coloured by Z₀), Schematic, SPICE → <em>Save
+  subcircuit…</em>.</li>
+</ol>
+<figure><img src="screenshots/extract_board.png" alt="Trace tool board tab" loading="lazy">
+<figcaption>The extracted path coloured by Z₀, with impedance steps marked.</figcaption></figure></div>
+
+<div class="uc" id="flow-coil"><h4>6. A PCB coil with the pour under it and a ferrite sheet</h4>
+<p class="who">3D extraction · <a href="#em3d">tool section</a>, <a href="#em3d-cores">cores</a></p>
+<ol>
+  <li>Open <b>3D extraction</b>; <em>Add…</em> a port: + at the coil's outer pad, − at the inner one (or both pads selected
+  in KiCad, <em>From KiCad selection</em>).</li>
+  <li>Tick the ground pour's net under <b>Conductors</b>; set f max (100 MHz for a 13.56 MHz coil); <em>Estimate</em>.</li>
+  <li><b>Analyse</b>: L and Q at the working frequency (Summary, R, L, Q (f)); the eddy currents (Current).</li>
+  <li><em>Magnetic cores → Add…</em>: "Plate / ferrite sheet", size and thickness, a material (built-in class or your grade),
+  centred on the coil, on the side away from the board, the adhesive as the clearance; the preview shows it over the copper.
+  Analyse again.</li>
+  <li>SPICE → Wideband: a model right at every frequency, core loss included.</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/em3d_core_dialog.png" alt="Core dialog with a ferrite sheet over a coil" loading="lazy"><figcaption>The core dialog and its preview.</figcaption></figure>
+  <figure class="card"><img src="screenshots/em3d_core_rlq.png" alt="R, L, Q with the ferrite sheet" loading="lazy"><figcaption>R, L, Q with the sheet.</figcaption></figure>
+</div></div>
+
+<div class="uc" id="flow-planar"><h4>7. A planar inductor or transformer on an E core</h4>
+<p class="who">3D extraction · <a href="#em3d-cores">cores</a></p>
+<ol>
+  <li>Draw the slots for the core's legs on Edge.Cuts (on the board or in the core's footprint); save.</li>
+  <li>A port across the winding; <em>Magnetic cores → Add…</em>, "E core", A–F from the core's drawing, E-E or E + I, the gap,
+  the material.</li>
+  <li><em>Snap to the board's slots</em> sets x, y and the rotation; check the preview; OK; Analyse.</li>
+  <li>Try gaps: L falls as N² μ₀ A<sub>e</sub> / (g + l<sub>e</sub>/μ) plus fringing. A port per winding gives M and k.</li>
+</ol>
+<figure><img src="screenshots/em3d_core_snap.png" alt="E core snapped to the board's slots" loading="lazy">
+<figcaption>An E18 planar core snapped to the three slots of its footprint, around a 3-turn spiral.</figcaption></figure></div>
+
+<div class="uc" id="flow-match"><h4>8. A matching network against part tolerances</h4>
+<p class="who">Matching &amp; Tolerance · <a href="#match">tool section</a></p>
+<ol>
+  <li>Source and load (R + jX, an RLC model or an <code>.s1p</code>), the bands with their return-loss and insertion-loss
+  specs.</li>
+  <li>Parts from the palette, each from the component library or typed with its tolerance.</li>
+  <li>Tick corners, Monte Carlo, worst case, sensitivity; <b>Run analysis</b>; read yield per band, the Smith cloud, the
+  sensitivity chart, the worst-case table and the BOM.</li>
+</ol></div>
+
+<div class="uc" id="flow-tests"><h4>9. Rerun every check after a layout change</h4>
+<p class="who">Simulation tests · <a href="#tests">section</a></p>
+<ol>
+  <li>After a run you like, <b>Save as test…</b> in that tool.</li>
+  <li>Home → <b>Simulation tests</b>: add checks from the last run's metrics (T<sub>max</sub> &lt; 85 °C, Z within target,
+  loop L &lt; 3 nH, …) and the files to keep.</li>
+  <li><code>python3 -m pcb_current_sim run board.simtests.toml --all</code> from a terminal or Makefile: exit code 1 on a
+  failure, a report in <code>simulations/&lt;timestamp&gt;/</code> with the change since the last run.</li>
+</ol></div>
 
 <h2 id="dc">DC &amp; Thermal</h2>
 <p class="lead">Feed currents and voltages into the copper of a real layout and see where the current goes, how much
@@ -750,6 +890,8 @@ as eddy currents in the pour push back on the coil's field (the step near 30 kHz
   ground pins plus a link between the load's supply and ground pins measures the whole loop.</li>
   <li><b>Conductors</b>: tick nearby nets, such as a ground pour, to include their eddy currents. They are taken only inside the
   window (the ports' pads and tracks plus the margin, or a window you type).</li>
+  <li><b>Magnetic cores</b> (optional): <em>Add…</em> a plate / sheet, E core, rod, toroid or boxes, with a material; see
+  <a href="#em3d-cores">Magnetic cores</a>.</li>
   <li><b>Options</b>: the frequency range; the pour cell size; the filament limit. <b>Estimate</b> shows the filament count,
   memory and run time before you run; over the limit the tool narrows the fine band, then uses larger cells, then fewer
   filaments per track, and says so.</li>
@@ -760,6 +902,39 @@ as eddy currents in the pour push back on the coil's field (the step near 30 kHz
 <figure><img src="screenshots/em3d_current.png" alt="Current map of the ground pour under a coil at 100 MHz, and a track cross-section" loading="lazy">
 <figcaption>Current tab: the eddy currents in the ground pour under the coil at 100 MHz form a ring under the winding (left);
 the current across one of the coil's tracks crowds to its edges (right).</figcaption></figure>
+
+<h3 id="em3d-cores">Magnetic cores</h3>
+<p>Ferrite plates and sheets, E cores through slots in the board, rods and toroids can be added to the solve. Their
+permeability raises L; a lossy material adds R, which the wideband model and the SPICE subcircuit carry.</p>
+<ol>
+  <li><b>How it is solved.</b> The core is cut into cells (a tensor grid, about 2500 cells by default, finer where copper comes
+  close). Its magnetisation is described by its flux through every cell face, so flux passes from cell to cell freely and
+  magnetic charge appears only at the core's surface and where the flux spreads; this is what keeps a μ<sub>r</sub> 10 000 core
+  accurate (Raviart-Thomas facet elements, a volume integral method: no air mesh). The core's answer to the filaments' field is
+  folded into the filament network as a set of modes: plain inductance for a lossless material, parallel R-L branches for a lossy
+  one, so the solve stays one passive R + sL network.</li>
+  <li><b>Materials.</b> A grade is μ<sub>i</sub> and a relaxation frequency f<sub>r</sub>: μ(f) = 1 + (μ<sub>i</sub> − 1) /
+  (1 + j f / f<sub>r</sub>). μ′ halves and μ″ peaks at f<sub>r</sub>. The built-ins are generic classes with typical values
+  (MnZn, NiZn, ferrite sheets for NFC and for wireless power, iron and alloy powder, nanocrystalline, an ideal one), not
+  products. Add your grade from its datasheet: by hand, or fitted to points read off its μ′, μ″ plot.</li>
+  <li><b>Shapes and placement.</b> Plate / sheet on the top or bottom side with a clearance; E core (E-E or E + I,
+  rectangular or round centre leg, gaps in the centre and outer legs) with its window centred on the board and its legs through
+  slots; rod; toroid; any boxes in board coordinates (a box with μ 1 cuts a gap). Centre by coordinates or relative to a
+  footprint, quarter-turn rotations; <em>Snap to the board's slots</em> places an E core where its legs fit the Edge.Cuts
+  cut-outs (also those drawn in a footprint) or non-plated holes.</li>
+</ol>
+<div class="cards">
+  <figure class="card"><img src="screenshots/em3d_core_dialog.png" alt="Core dialog: a ferrite sheet over a coil" loading="lazy"><figcaption>Core dialog: a 16 × 16 × 0.3 mm sheet over the coil, with its top-view preview.</figcaption></figure>
+  <figure class="card"><img src="screenshots/em3d_core_snap.png" alt="An E core snapped to the board's slots" loading="lazy"><figcaption>An E18 planar core snapped to the three slots of its footprint.</figcaption></figure>
+  <figure class="card"><img src="screenshots/em3d_materials.png" alt="Material library" loading="lazy"><figcaption>Material library: built-in classes and your grades.</figcaption></figure>
+  <figure class="card"><img src="screenshots/em3d_grade_fit.png" alt="A grade fitted to datasheet points" loading="lazy"><figcaption>A grade fitted to μ′, μ″ points read off a datasheet.</figcaption></figure>
+  <figure class="card"><img src="screenshots/em3d_core_rlq.png" alt="R, L, Q of the coil with the ferrite sheet" loading="lazy"><figcaption>The coil with the sheet: L up, R up near the grade's f<sub>r</sub>.</figcaption></figure>
+  <figure class="card"><img src="screenshots/em3d_planar_summary.png" alt="Summary of the planar E core" loading="lazy"><figcaption>The planar E core's summary, with the core mesh.</figcaption></figure>
+</div>
+<div class="warn"><b>One relaxation is a first fit</b>A single relaxation puts μ″/μ′ = f / f<sub>r</sub> below f<sub>r</sub>; real
+power ferrites have far less loss there (their μ″ rises steeply near the resonance). The built-in "MnZn power ferrite" at
+f<sub>r</sub> 3 MHz therefore overstates the loss at 1 MHz several times. For loss numbers, fit your grade to datasheet points
+around your working frequency; for L, the static μ<sub>i</sub> is what matters.</div>
 
 <h3 id="em3d-calc">Skin-depth explorer</h3>
 <p>Skin depth sets where R starts to rise and how finely the tool cuts the copper. Below, δ against frequency for copper, the
@@ -783,7 +958,7 @@ raises R earlier: the 4-turn coil above is already 10 % up at 1 MHz, where δ (6
   <li><b>Quasi-static.</b> No radiation and no transmission-line delay: valid while the copper is shorter than about λ/10 (a few
   hundred MHz across a board). For a line's Z₀ and delay use <a href="#trace">Trace R/L/C</a>.</li>
   <li><b>No capacitance yet</b>, so no self-resonance of a coil (planned).</li>
-  <li><b>No magnetic materials yet</b>: a ferrite core or shield is not in the model (planned, with a core library).</li>
+  <li><b>Cores are linear</b>: plates, E cores, rods and toroids with a one-relaxation μ(f) are in the model; DC bias (L against current), core loss against flux density and temperature are not yet.</li>
   <li><b>Parts are not in the circuit.</b> Only copper is solved; close a loop through a part with a link (an ideal short). The
   part's own inductance (a shunt's, a capacitor's ESL) is not included.</li>
   <li><b>Cells.</b> Pads and pours are cells of the chosen size. Copper of one net closer than a cell to other copper of the same
@@ -896,6 +1071,47 @@ every frequency up to f max, plain R and L, any SPICE. With several ports it use
 the solve to 1e-4.</dd>
 </dl></div>
 
+<div class="uc">
+<h4>7. A ferrite sheet behind a coil: which grade?</h4>
+<p class="who">NFC antennas, wireless-power coils, inductive sensors with a shield sheet.</p>
+<dl>
+<dt>Situation</dt><dd>A ferrite sheet on the coil raises L and shields what is behind it. Sheets are sold for 13.56 MHz (NFC)
+and for 100–200 kHz (wireless power); they look the same.</dd>
+<dt>Why this tool</dt><dd>The sheet is part of the solve, with its loss: L, R and Q at the working frequency for each grade,
+and with any pour you tick.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Port across the coil; Analyse without a core (and with the pour ticked, if there is one).</li>
+  <li><em>Magnetic cores → Add…</em>: "Plate / ferrite sheet", its size and thickness, the grade, centred on the coil, the
+  adhesive as the clearance. Analyse; read L and Q at the working frequency.</li>
+  <li>Change the grade (or <em>Materials… → Add…</em> yours from its datasheet), Analyse again.</li>
+</ol></dd>
+<dt>Example</dt><dd>The 4-turn coil (12 mm, 0.5 mm tracks) at 13.56 MHz: alone 222 nH, Q 77; over a ground pour 153 nH, Q 49.
+With a 16 × 16 × 0.1 mm NFC-class sheet (μ′ 150) 0.05 mm over it: 366 nH, Q 71: L up 65 %, Q almost kept. With a
+wireless-power-class sheet (μ′ 700, f<sub>r</sub> 5 MHz): 390 nH but Q 10.5, since at 13.56 MHz that grade is mostly loss.
+With the NFC sheet and the pour: 224 nH, Q 46.</dd>
+</dl></div>
+
+<div class="uc">
+<h4>8. A planar inductor: how much gap?</h4>
+<p class="who">Planar inductors and transformers on E cores, with the winding in the board.</p>
+<dl>
+<dt>Situation</dt><dd>An ungapped core gives the most L but stores little energy and its L follows μ, which varies ±25 % with
+temperature and from part to part. A gap sets L by geometry. How much gap gives the L you want?</dd>
+<dt>Why this tool</dt><dd>It solves the real winding, the core with its gap and the fringing around it, and the winding's own
+air inductance: the magnetic-circuit formula has none of these.</dd>
+<dt>Steps</dt><dd><ol>
+  <li>Slots for the legs on Edge.Cuts; a port across the winding.</li>
+  <li><em>Magnetic cores → Add…</em>: "E core", A–F from the core's drawing, the material; <em>Snap to the board's slots</em>.</li>
+  <li>Analyse for a few gaps; read L at DC and Q at the switching frequency.</li>
+</ol></dd>
+<dt>Example</dt><dd>A 3-turn spiral (12 mm, 0.5 mm tracks; 166 nH without a core) in an E18 planar pair (A 18, B 2.4, C 5, D 1.2,
+E 14, F 4 mm; MnZn μ<sub>i</sub> 2000). Gap 0: 16.7 µH (the simple path estimate N²μ₀μA<sub>e</sub>/l<sub>e</sub> says 19.5).
+Gap 0.1 / 0.2 / 0.5 mm: 2.33 / 1.42 / 0.78 µH, against the bare-gap estimate N²μ₀A<sub>e</sub>/(g + l<sub>e</sub>/μ) of
+2.03 / 1.07 / 0.44 µH: the difference is the gap's fringing and the winding's ~0.2 µH in air, which matter more the larger the
+gap. The gap also dilutes the core's loss: with the built-in power-ferrite grade Q at 1 MHz goes from 2.6 (ungapped) to 24 at
+0.2 mm (see the note above on that grade's loss).</dd>
+</dl></div>
+
 <h2 id="loop">Switching Loop</h2>
 <p class="lead">For a hard-switched power stage (buck, boost, half-bridge, motor phase, a converter IC with internal
 switches): the inductance of the hot loop and of each gate loop as laid out, where that inductance sits, how the switch
@@ -961,6 +1177,10 @@ f = 1/(2π√(LC)), overshoots by about L·di/dt, and radiates. Typical good SMD
   <figure class="card"><img src="screenshots/loop_breakdown.png" alt="Where the inductance is" loading="lazy"><figcaption>Where the L is: by net, layer, vias and part.</figcaption></figure>
   <figure class="card"><img src="screenshots/loop_map.png" alt="Current density map" loading="lazy"><figcaption>Map: HF current density.</figcaption></figure>
   <figure class="card"><img src="screenshots/loop_impedance.png" alt="Impedance plot" loading="lazy"><figcaption>Impedance across the switch.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_switching.png" alt="Switching edges" loading="lazy"><figcaption>Switching: the edges in time, losses.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_snubber.png" alt="Snubber designer" loading="lazy"><figcaption>Snubber: without and with, overshoot against R<sub>s</sub>.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_emi.png" alt="EMI estimate" loading="lazy"><figcaption>EMI: harmonics, radiated and conducted against CISPR 32.</figcaption></figure>
+  <figure class="card"><img src="screenshots/loop_compare.png" alt="Compare with the baseline" loading="lazy"><figcaption>Compare: this run against the baseline.</figcaption></figure>
 </div>
 
 <h3 id="loop-ring">Ringing &amp; snubber explorer</h3>
@@ -1229,8 +1449,9 @@ one's capacitance, or between the regulator's loop and the output capacitors. Th
 current stepping and the output voltage dipping and recovering, with a stated output capacitor. That plot is the regulator's
 loop answering a step through that capacitor. Fit a small loop model to it, and the model answers just as well on your
 board's capacitance, which is rarely the datasheet's.</p>
-<figure><img src="screenshots/pdn_regfit_fit.png" alt="Regulator fit window: datasheet and model per load step, and the output impedance" loading="lazy">
-<figcaption>TPS61021A fitted from its datasheet plot: model over datasheet for both edges (2 % rms), and |Z<sub>out</sub>| with the test C and with 10× it.</figcaption></figure>
+<figure><img src="screenshots/pdn_regfit_source.png" alt="A datasheet load-transient plot: output current stepping 1 A to 2 A, output voltage dipping and recovering" loading="lazy" style="max-width:620px">
+<figcaption>The input: a boost converter's datasheet load-transient plot (TPS61021A, Figure 16: V<sub>in</sub> 2.4 V, V<sub>out</sub> 3.3 V,
+I<sub>out</sub> 1 A → 2 A), cut from the PDF as a screenshot.</figcaption></figure>
 <ol>
   <li><b>Image.</b> "Open image…" or "Paste" a screenshot (zoom the PDF in first), or "Import CSV…" from another digitiser
   (columns t, i, v).</li>
@@ -1246,7 +1467,10 @@ board's capacitance, which is rarely the datasheet's.</p>
       nearest, a right-drag box removes all inside it, Backspace / "Undo" the last; Esc ends. Put points at each corner of the
       step, at the bottom of the dip and the top of the overshoot, and a few along the recovery. Zoom with the toolbar; clicking
       keeps the zoom.</li>
-    </ul></li>
+    </ul>
+  <figure><img src="screenshots/pdn_regfit_image.png" alt="Regulator fit window, Image tab: the plot area marked, both traces read by colour" loading="lazy">
+  <figcaption>Image tab: plot area marked, both traces read by colour (drawn over the image: current 1.025 A step, voltage swing
+  333 mV); left, the scales, the test circuit (22 µF, 3 mΩ), the boost's operating point and the control type.</figcaption></figure></li>
   <li><b>Datasheet test circuit and control type</b>: the output C of the test (from the plot's application circuit, after DC
   bias if you know it) and its ESR; the control type from the datasheet's first page (current-mode, voltage-mode, constant
   on-time, LDO, "Ringing recovery", "General", or "Try every type and keep the best"); for a boost, V<sub>in</sub>,
@@ -1254,9 +1478,18 @@ board's capacitance, which is rarely the datasheet's.</p>
   <li><b>Fit options</b>: "Fit up to … after each edge" (leave out what follows the recovery), "Also fit the test capacitance
   (±50 %) and its ESR", "Match the peak deviation first".</li>
   <li><b>Fit.</b> Rising and falling steps are fitted separately (regulators answer them differently). The Fit tab overlays
-  model and plot per edge and plots |Z<sub>out</sub>| with the test C and with 10× it. "Use for this rail".</li>
+  model and plot per edge and plots |Z<sub>out</sub>| with the test C and with 10× it. "Use for this rail".
+  <figure><img src="screenshots/pdn_regfit_fit.png" alt="Regulator fit window, Fit tab: model over datasheet for both load steps, and the output impedance" loading="lazy">
+  <figcaption>Fit tab: current-mode model over the datasheet for the rising step (peak 163 mV, 2.0 mV rms, 1 %) and the falling
+  step (170 mV, 2.2 mV rms); below, |Z<sub>out</sub>| with the 22 µF of the test (crossover 28 kHz) and with 220 µF (the loop
+  slows and the peak moves down in frequency).</figcaption></figure></li>
   <li><b>Keep it.</b> "Save fit…" (PDN, Regulator box) stores the fit under the regulator's part number; any board with a part
-  of that Value next to the rail gets it automatically, and "Saved fits" picks one by hand.</li>
+  of that Value next to the rail gets it automatically, and "Saved fits" picks one by hand.
+  <figure><img src="screenshots/pdn_regfit_in_pdn.png" alt="PDN window: Regulator box with the fitted control loop, impedance at the load" loading="lazy">
+  <figcaption>Back in the PDN window: the Regulator box shows the fit ("Control loop fitted to the datasheet", crossover 28 kHz
+  with the datasheet's 22 µF). Note "None picked": the regulator's output pad has not been found on this board, so the fit is
+  not connected yet and the rail rests on its four 10 µF capacitors alone, 24× over the target at 1 kHz. <em>Pick output
+  pad…</em> connects it; Analyse again.</figcaption></figure></li>
 </ol>
 <p>The model: Y(s) = K·(s + ω<sub>z</sub>)/(s + ω<sub>0</sub>) · (1 + s/ω<sub>z2</sub>) / (1 + s/ω<sub>p</sub>) /
 (1 + s/(Qω<sub>n</sub>) + s²/ω<sub>n</sub>²) · (1 − s/ω<sub>rhp</sub>). K is the loop's speed (crossover ≈ K / 2πC), the zero
@@ -1616,7 +1849,7 @@ Monte Carlo; adjust; BOM.</dd>
   resistors start on in DC &amp; Thermal only). DC &amp; Thermal and Trace use the ideal value; Switching Loop and PDN use the
   capacitor's <em>real model</em> (ESR, ESL, DC bias, a library part), stored with the part, so it is entered once for both.
   Changes are saved at once; deleting or renaming a part another tool uses asks first. Older scenario files with separate DC and
-  Trace lists are merged on first load.
+  Trace lists are merged on first load.<br><img src="screenshots/components.png" alt="Components window" loading="lazy" style="max-width:720px">
   <div class="uc" id="uc-components"><h4>Example: one inductor, three tools</h4>
   <p>A buck converter's 4.7 µH inductor L1 has a DCR of 18 mΩ. In DC &amp; Thermal, "Add…" an element across L1's pads, 18 mΩ:
   the output current now flows through it and heats its pads. In the Trace tool the same L1 shows in the Elements list with
@@ -1713,6 +1946,8 @@ zones and save in KiCad first: the tests read the saved board.</p>
 <tr><td>What are my PCB coil's L and Q, and how much does the pour under it cost?</td><td>3D extraction</td><td>L, R, Q against f, current maps</td></tr>
 <tr><td>How much does this copper lose at the switching harmonics, not just at DC?</td><td>3D extraction</td><td>R(f), wideband SPICE</td></tr>
 <tr><td>How much does the switching loop induce into my sense / signal lines?</td><td>3D extraction (two ports)</td><td>M, k; V = M·di/dt</td></tr>
+<tr><td>What does a ferrite sheet (and which grade) do to my coil's L and Q?</td><td>3D extraction (cores)</td><td>L, R, Q against f</td></tr>
+<tr><td>How much gap does my planar inductor on an E core need?</td><td>3D extraction (cores)</td><td>L against the gap, Q</td></tr>
 <tr><td>How big is my converter's hot loop, and where is the inductance?</td><td>Switching Loop</td><td>L loop, breakdown, map</td></tr>
 <tr><td>How much does the switch node overshoot and ring? Do I need a snubber?</td><td>Switching Loop</td><td>edges, snubber tab</td></tr>
 <tr><td>Will the off FET turn on by itself (Miller turn-on)?</td><td>Switching Loop</td><td>other gate peak vs V<sub>th</sub></td></tr>
@@ -1740,11 +1975,16 @@ zones and save in KiCad first: the tests read the saved board.</p>
 <tr><td rowspan="3">Trace R/L/C</td><td>Microstrip / stripline field solve against Hammerstad–Jensen / Wheeler</td><td>within 1.5 % / 1.6 %</td></tr>
 <tr><td>Pour over a plane: C and L against εA/h and μ₀hl/W; R against DC solver</td><td>within 1 %; within 2 %</td></tr>
 <tr><td>Subcircuit delay in ngspice against the extracted delay</td><td>matches</td></tr>
-<tr><td rowspan="5">3D extraction</td><td>Round-wire skin effect against the exact Bessel solution (up to r/δ = 5)</td><td>within 0.3 %</td></tr>
+<tr><td rowspan="10">3D extraction</td><td>Round-wire skin effect against the exact Bessel solution (up to r/δ = 5)</td><td>within 0.3 %</td></tr>
 <tr><td>Bar self-inductance against Grover; coaxial loops against Maxwell's formula</td><td>within 0.2 %; within 0.15 %</td></tr>
 <tr><td>Hairpin and a 3-turn spiral against FastHenry (same filaments), 1 kHz – 1 GHz</td><td>R, L within 0.1 %; L 0.15 %, R 0.45 %</td></tr>
 <tr><td>Track over a ground pour against the microstrip formula</td><td>within 2.5 %</td></tr>
 <tr><td>Wideband SPICE model in ngspice against the solve</td><td>within 1e-4</td></tr>
+<tr><td>Cores: charge integrals of every cell / face pair against brute-force integration</td><td>within 0.2 %</td></tr>
+<tr><td>A χ → ∞ cube in a uniform field against its known polarisability (3.644)</td><td>converges from below: 3.000, 3.42, 3.56, 3.60</td></tr>
+<tr><td>A loop over a large μ<sub>r</sub> 10 000 plate against the image method (the half-space bound)</td><td>from below: 0.986 of it for a 32 × 32 mm plate</td></tr>
+<tr><td>A gapped ring: L against the gap reluctance N²μ₀A/g plus a constant leakage</td><td>slope within 1.4 %</td></tr>
+<tr><td>Lossy (Debye) cores as modes against direct complex solves; a closed ring's loss tangent against μ″/μ′</td><td>1e-8; 0.993 at μ<sub>r</sub> 10⁴</td></tr>
 <tr><td rowspan="6">Switching Loop</td><td>Wide strip over a plane against Hammerstad; plane pair against image theory</td><td>0.4 %; 0.5 %</td></tr>
 <tr><td>Copper R against the DC solver</td><td>within 3 %</td></tr>
 <tr><td>Via pair, diagonal narrow track against hand formulas</td><td>within 5 %</td></tr>
@@ -1821,8 +2061,9 @@ python3 -m pcb_current_sim.wxgui board.kicad_pcb --home</code></pre>
 <ul>
   <li><b>PDN, next step</b>: the line-transient (PSRR) plot, the regulator's remote-sense point.</li>
   <li><b>SI &amp; Fields</b>: 2D cross-section solver for coupled lines and crosstalk, return-current paths, HV field and clearance.</li>
-  <li><b>3D extraction, next steps</b>: magnetic cores from a core library (ferrite, iron powder, nanocrystalline), PCB coils and
-  planar magnetics, coupling to a Switching Loop cell, capacitance (FastCap's method) and C to a chassis or heatsink.</li>
+  <li><b>3D extraction, next steps</b>: cores with DC bias (L against current), core loss against flux density (Steinmetz) and
+  temperature; PCB coils and planar magnetics (inter-turn C, self-resonance); coupling to a Switching Loop cell; capacitance
+  (FastCap's method) and C to a chassis or heatsink; FastHenry / FastCap export.</li>
   <li><b>Full-wave</b> (openEMS) export.</li>
 </ul>
 
