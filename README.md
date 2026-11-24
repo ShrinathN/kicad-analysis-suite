@@ -2,7 +2,9 @@
 
 # tl;dr (no AIsloppa)
 
- This is the software suite for KiCad which lets kycad run a variety of simulations in it. I just wanted to have access to the same features as many paid and professional EDA packages out there in KiCad, which is why this was made. There will be bugs and there will be quirks. This was made by me using Claude Opus 5.5 over a few days and is being developed right now. It is mostly for my personal use but you are free to do as you see fit.
+ This is the software suite for KiCad which lets KiCad run a variety of simulations in it. I just wanted to have access to the same features as many paid and professional EDA packages out there in KiCad, which is why this was made. There will be bugs and there will be quirks. This was made by me using Claude Opus 5.5 over a few days and is being developed right now. It is mostly for my personal use but you are free to do as you see fit.
+
+# AIsloppa begins
 
 **PCB Analysis Suite for KiCad**: a KiCad 10 plugin, also usable standalone, for analysing printed circuit boards. It has six tools so far:
 
